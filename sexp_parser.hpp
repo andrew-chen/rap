@@ -355,14 +355,8 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv, const BoundBin
     const Goal* body = compile_goal(a, genv, benv2, c->car);
     if (!body) return nullptr;
 
-    // Wrap with nested Fresh so outer binder is first name:
-    // (fresh (x y) body) => Fresh(x, Fresh(y, body))
-    const Goal* g = body;
-    for (std::int32_t i = (std::int32_t)n - 1; i >= 0; --i) {
-      g = make_fresh(a, names[(std::uint32_t)i], g);
-      if (!g) return nullptr;
-    }
-    return g;
+	// One n-ary Fresh node
+	return make_fresh(a, n, body);
   }
 
   if (sym_lit_eq(op, "disj") || sym_lit_eq(op, "conj")) {

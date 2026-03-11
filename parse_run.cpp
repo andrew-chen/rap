@@ -12,7 +12,9 @@ int main() {
   // NEW: surface-language fresh; expects q unified with a fresh logic var
   const char* program4 = "(run 5 (q) (fresh (x) (== q x)))";
 
-  const char* programs[] = {program1, program2, program3, program4};
+const char* program5 = "(run 5 (q) (fresh (x y) (disj (== q x) (== q y))))";
+
+  const char* programs[] = {program1, program2, program3, program4, program5};
 
   for (const char* program : programs) {
     std::printf("Program: %s\n", program);

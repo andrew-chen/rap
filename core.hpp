@@ -161,7 +161,7 @@ enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh };
 
 struct GoalEq   { Term u; Term v; };
 struct GoalBin  { const struct Goal* g1; const struct Goal* g2; };
-struct GoalFresh{ const SymEntry* name; const struct Goal* body; };
+struct GoalFresh{ std::uint32_t n; const Goal* body; };
 
 struct Goal {
   GoalTag tag;
@@ -198,11 +198,11 @@ inline const Goal* make_conj(Arena& a, const Goal* g1, const Goal* g2) {
   return g;
 }
 
-inline const Goal* make_fresh(Arena& a, const SymEntry* name, const Goal* body) {
+inline const Goal* make_fresh(Arena& a, std::uint32_t n, const Goal* body) {
   Goal* g = a.make<Goal>();
   if (!g) return nullptr;
   g->tag = GoalTag::Fresh;
-  g->fresh = GoalFresh{name, body};
+  g->fresh = GoalFresh{n, body};
   return g;
 }
 
@@ -314,13 +314,23 @@ inline bool step(Arena& a, WorkQueue& q, Work* w, State& yielded) {
     }
 
     case GoalTag::Fresh: {
-      // Allocate a new Var id from st.counter and push it on the env stack.
-      EnvFrame* ef = a.make<EnvFrame>();
-      if (!ef) return false;
-      ef->var_id = st.counter;
-      ef->next = st.env;
+	// allocate n fresh var ids from st.counter
+	  std::uint32_t n = g->fresh.n;
+	  std::uint32_t base = st.counter;
+	  st.counter += n;
 
-      State st2{ st.subst, ef, st.counter + 1 };
+	  // extend env: push vars in order so the LAST becomes BVar(0)
+	  const EnvFrame* env2 = st.env;
+	  for (std::uint32_t i = 0; i < n; ++i) {
+	    EnvFrame* ef = a.make<EnvFrame>();
+	    if (!ef) return false;
+	    ef->var_id = base + i;
+	    ef->next = env2;
+	    env2 = ef;
+	  }
+
+	// continue with body under extended env
+	State st2{ st.subst, env2, st.counter };
 
       // Continue with body under extended env.
       w->g = g->fresh.body;
