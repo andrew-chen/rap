@@ -1,5 +1,5 @@
 CXX      ?= clang++
-CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -pedantic
+CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -pedantic -Werror
 
 all: parse_run
 
