@@ -187,11 +187,20 @@ inline bool unify(Arena& a, Term u0, Term v0, const EnvFrame* env, const Binding
 }
 
 // ---- Goals ----
-enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh };
+enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe };
 
 struct GoalEq   { Term u; Term v; };
 struct GoalBin  { const struct Goal* g1; const struct Goal* g2; };
 struct GoalFresh{ std::uint32_t n; const Goal* body; };
+
+
+struct GoalProbe{
+  const struct Goal* sub;
+  Term condition;   // must be Sym or Var already bound to Sym (true/false/insufficient/bounded)
+  Term max_iter;    // must be Int or Var already bound to Int
+  Term sandbox;     // must be Sym(true/false) or Var already bound to Sym
+  Term req_ground;  // must be Sym(true/false) or Var already bound to Sym
+};
 
 struct Goal {
   GoalTag tag;
@@ -199,6 +208,7 @@ struct Goal {
     GoalEq eq;
     GoalBin bin;
     GoalFresh fresh;
+    GoalProbe probe;
   };
 };
 
