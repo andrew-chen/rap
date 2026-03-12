@@ -33,3 +33,4 @@
 .DS_Store
 out.txt
 parse_run
+*.swp
