@@ -4,6 +4,36 @@
 #include <cstdint>
 
 // ============================================================================
+// 4-valued outcome used by probe/meta-evaluation
+// ============================================================================
+enum class Outcome : std::uint8_t { True, False, Insufficient, Bounded };
+
+struct OutcomeSyms {
+  const SymEntry* s_true = nullptr;
+  const SymEntry* s_false = nullptr;
+  const SymEntry* s_insufficient = nullptr;
+  const SymEntry* s_bounded = nullptr;
+};
+
+inline const SymEntry* outcome_to_sym(Outcome o, const OutcomeSyms& syms) {
+  switch (o) {
+    case Outcome::True:        return syms.s_true;
+    case Outcome::False:       return syms.s_false;
+    case Outcome::Insufficient:return syms.s_insufficient;
+    case Outcome::Bounded:     return syms.s_bounded;
+    default:                   return nullptr;
+  }
+}
+
+inline bool sym_to_outcome(const SymEntry* s, const OutcomeSyms& syms, Outcome& out) {
+  if (s == syms.s_true)        { out = Outcome::True; return true; }
+  if (s == syms.s_false)       { out = Outcome::False; return true; }
+  if (s == syms.s_insufficient){ out = Outcome::Insufficient; return true; }
+  if (s == syms.s_bounded)     { out = Outcome::Bounded; return true; }
+  return false;
+}
+
+// ============================================================================
 // Core µKanren-ish kernel (arena-only; POD terms; iterative unify; fair eval)
 // Adds:
 //   - TermTag::BVar (de Bruijn bound variable index)

@@ -389,6 +389,10 @@ struct ParsedQuery {
   std::uint32_t vars_used;
   const Goal* goal;
   Intern intern;
+
+  // Interned symbols for 4-valued outcomes (per run)
+  OutcomeSyms outcome_syms;
+
 };
 
 inline ParsedQuery parse_query(Arena& a, const char* src) {
@@ -400,6 +404,16 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
   out.intern = Intern{0, nullptr};
 
   if (!intern_init(a, out.intern, 256)) return out;
+
+  // Intern the 4-valued outcome symbols for this run
+  out.outcome_syms.s_true        = intern_cstr(a, out.intern, "true");
+  out.outcome_syms.s_false       = intern_cstr(a, out.intern, "false");
+  out.outcome_syms.s_insufficient= intern_cstr(a, out.intern, "insufficient");
+  out.outcome_syms.s_bounded     = intern_cstr(a, out.intern, "bounded");
+  if (!out.outcome_syms.s_true || !out.outcome_syms.s_false || !out.outcome_syms.s_insufficient || !out.outcome_syms.s_bounded) {
+	  out.goal = nullptr;
+	  return out;
+	}
 
   Lexer lx{src};
   Token tok = lx.next();
