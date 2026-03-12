@@ -26,7 +26,7 @@ const char* program5 = "(run 5 (q) (fresh (x y) (disj (== q x) (== q y))))";
       continue;
     }
 
-    runN(a, pq.n, pq.goal, pq.qvar, pq.vars_used,
+    runN(a, pq.n, pq.goal, pq.qvar, pq.vars_used, pq.outcome_syms,
      [&] (Term ans, State /*st*/) {
        print_term(ans);
        std::printf("\n");

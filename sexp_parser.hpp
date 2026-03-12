@@ -377,6 +377,22 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv, const BoundBin
     return acc;
   }
 
+  if (sym_lit_eq(op, "probe")) {
+    // syntax: (probe GOAL CONDITION MAX_ITER SANDBOX REQ_GROUND)
+    if (!c || !c->cdr || !c->cdr->cdr || !c->cdr->cdr->cdr || !c->cdr->cdr->cdr->cdr || c->cdr->cdr->cdr->cdr->cdr)
+      return nullptr; // exactly 5 args
+
+    const Goal* sub = compile_goal(a, genv, benv, c->car);
+    if (!sub) return nullptr;
+
+    Term condition = compile_term(a, genv, benv, c->cdr->car);
+    Term max_iter  = compile_term(a, genv, benv, c->cdr->cdr->car);
+    Term sandbox   = compile_term(a, genv, benv, c->cdr->cdr->cdr->car);
+    Term req_ground= compile_term(a, genv, benv, c->cdr->cdr->cdr->cdr->car);
+
+    return make_probe(a, sub, condition, max_iter, sandbox, req_ground);
+  }
+
   return nullptr;
 }
 

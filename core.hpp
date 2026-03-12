@@ -3,6 +3,9 @@
 #include "intern.hpp"
 #include <cstdint>
 
+enum class StepResult : std::uint8_t { NoYield, Yield, OOM };
+
+
 // ============================================================================
 // 4-valued outcome used by probe/meta-evaluation
 // ============================================================================
@@ -124,6 +127,12 @@ inline Term resolve_bvar(Term t, const EnvFrame* env) {
   return Term::var(e->var_id);
 }
 
+inline Term eval_probe_arg(Term t, const State& st) {
+  // Resolve bound vars then substitution
+  t = resolve_bvar(t, st.env);
+  t = walk(t, st.subst);
+  return t;
+}
 // ---- Iterative unify (no recursion) ----
 struct UnifyJob { Term u; Term v; UnifyJob* next; };
 static_assert(std::is_trivially_destructible_v<UnifyJob>);
@@ -246,6 +255,21 @@ inline const Goal* make_fresh(Arena& a, std::uint32_t n, const Goal* body) {
   return g;
 }
 
+inline const Goal* make_probe(
+    Arena& a,
+    const Goal* sub,
+    Term condition,
+    Term max_iter,
+    Term sandbox,
+    Term req_ground
+) {
+  Goal* g = a.make<Goal>();
+  if (!g) return nullptr;
+  g->tag = GoalTag::Probe;
+  g->probe = GoalProbe{sub, condition, max_iter, sandbox, req_ground};
+  return g;
+}
+
 // ---- Fair evaluator: explicit continuation + FIFO work queue ----
 enum class KontTag : std::uint8_t { Done, Then };
 struct KontThen { const Goal* g2; const struct Kont* next; };
@@ -301,24 +325,26 @@ struct WorkQueue {
   }
 };
 
-inline bool apply_k_or_yield(Arena& a, WorkQueue& q, State st, const Kont* k, Work* reuse, State& yielded) {
+inline StepResult apply_k_or_yield(Arena& a, WorkQueue& q, State st, const Kont* k, Work* reuse, State& yielded) {
   if (k && k->tag == KontTag::Then) {
     Work* w = reuse ? reuse : a.make<Work>();
-    if (!w) return false;
+    if (!w) return StepResult::OOM;
     w->g = k->then_.g2;
     w->st = st;
     w->k = k->then_.next;
     q.push(w);
-    return false; // not yielded yet
+    return StepResult::NoYield; // not yielded yet
   }
   if (k && k->tag == KontTag::Done) {
     yielded = st;
-    return true; // yielded an answer
+    return StepResult::Yield; // yielded an answer
   }
-  return false;
+  return StepResult::NoYield;
 }
 
-inline bool step(Arena& a, WorkQueue& q, Work* w, State& yielded) {
+inline Outcome probe_run(Arena& a, const OutcomeSyms& syms, const Goal* sub, State start, std::uint32_t max_iter, State& witness_out);
+
+inline StepResult step(Arena& a, WorkQueue& q, Work* w, State& yielded, const OutcomeSyms& syms) {
   const Goal* g = w->g;
   State st = w->st;
   const Kont* k = w->k;
@@ -326,7 +352,7 @@ inline bool step(Arena& a, WorkQueue& q, Work* w, State& yielded) {
   switch (g->tag) {
     case GoalTag::Eq: {
       const Binding* s = st.subst;
-      if (!unify(a, g->eq.u, g->eq.v, st.env, s)) return false;
+      if (!unify(a, g->eq.u, g->eq.v, st.env, s)) return StepResult::NoYield;
       State st2{ s, st.env, st.counter };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
@@ -339,18 +365,18 @@ inline bool step(Arena& a, WorkQueue& q, Work* w, State& yielded) {
 
       // Allocate one Work for right branch.
       Work* w2 = a.make<Work>();
-      if (!w2) return false;
+      if (!w2) return StepResult::OOM;
       w2->g = g->bin.g2; w2->st = st; w2->k = k;
       q.push(w2);
-      return false;
+      return StepResult::NoYield;
     }
 
     case GoalTag::Conj: {
       const Kont* k2 = kont_then(a, g->bin.g2, k);
-      if (!k2) return false;
+      if (!k2) return StepResult::OOM;
       w->g = g->bin.g1; w->st = st; w->k = k2;
       q.push(w);
-      return false;
+      return StepResult::NoYield;
     }
 
     case GoalTag::Fresh: {
@@ -363,7 +389,7 @@ inline bool step(Arena& a, WorkQueue& q, Work* w, State& yielded) {
 	  const EnvFrame* env2 = st.env;
 	  for (std::uint32_t i = 0; i < n; ++i) {
 	    EnvFrame* ef = a.make<EnvFrame>();
-	    if (!ef) return false;
+	    if (!ef) return StepResult::OOM;
 	    ef->var_id = base + i;
 	    ef->next = env2;
 	    env2 = ef;
@@ -377,19 +403,128 @@ inline bool step(Arena& a, WorkQueue& q, Work* w, State& yielded) {
       w->st = st2;
       w->k = k;
       q.push(w);
-      return false;
+      return StepResult::NoYield;
     }
 
+	case GoalTag::Probe: {
+	  // Evaluate/resolve args (must already be values if Vars are used)
+	  Term cond_t = eval_probe_arg(g->probe.condition, st);
+	  Term max_t  = eval_probe_arg(g->probe.max_iter, st);
+	  Term sand_t = eval_probe_arg(g->probe.sandbox, st);
+	  Term reqg_t = eval_probe_arg(g->probe.req_ground, st);
+
+	  // Parse condition enum
+	  Outcome want{};
+	  const SymEntry* cond_sym = (cond_t.tag == TermTag::Sym) ? cond_t.sym : nullptr;
+	  if (!cond_sym || !sym_to_outcome(cond_sym, syms, want)) {
+	    // ill-formed condition => insufficient
+	    Outcome got = Outcome::Insufficient;
+	    if (got != want) return StepResult::NoYield; // if want wasn't parseable, treat as fail
+	    // If want itself wasn't parseable, we can't match; fail.
+	    return StepResult::NoYield;
+	  }
+
+	  // Parse max_iter
+	  if (max_t.tag != TermTag::Int) {
+	    // max_iter not an integer => insufficient
+	    Outcome got = Outcome::Insufficient;
+	    if (got == want) return apply_k_or_yield(a, q, st, k, w, yielded);
+	    return StepResult::NoYield;
+	  }
+	  std::uint32_t max_iter = (max_t.value < 0) ? 0u : (std::uint32_t)max_t.value;
+
+	  // Parse booleans (symbols "true"/"false")
+	  bool sandbox = false;
+	  bool req_ground = false;
+
+	  if (sand_t.tag != TermTag::Sym || (sand_t.sym != syms.s_true && sand_t.sym != syms.s_false)) {
+	    Outcome got = Outcome::Insufficient;
+	    if (got == want) return apply_k_or_yield(a, q, st, k, w, yielded);
+	    return StepResult::NoYield;
+	  }
+	  sandbox = (sand_t.sym == syms.s_true);
+
+	  if (reqg_t.tag != TermTag::Sym || (reqg_t.sym != syms.s_true && reqg_t.sym != syms.s_false)) {
+	    Outcome got = Outcome::Insufficient;
+	    if (got == want) return apply_k_or_yield(a, q, st, k, w, yielded);
+	    return StepResult::NoYield;
+	  }
+	  req_ground = (reqg_t.sym == syms.s_true);
+
+	  // Strict groundness check (v1): if requested and not ground enough => insufficient.
+	  // For Phase 2 we implement this conservatively as "disallow any unbound Var in the *current* state".
+	  // (We will replace this with a proper goal/term traversal in a later micro-edit.)
+	  if (req_ground) {
+	    // Conservative check: if query var 0 is unbound, treat as insufficient.
+	    // NOTE: We'll upgrade this soon; for now it is a placeholder strictness gate.
+	    Term q0 = walk(Term::var(0), st.subst);
+	    if (q0.tag == TermTag::Var) {
+	      Outcome got = Outcome::Insufficient;
+	      if (got == want) return apply_k_or_yield(a, q, st, k, w, yielded);
+	      return StepResult::NoYield;
+	    }
+	  }
+
+	  // Run bounded probe
+	  State witness{};
+	  Outcome got = probe_run(a, syms, g->probe.sub, st, max_iter, witness);
+
+	  // Success iff outcomes match
+	  if (got != want) return StepResult::NoYield;
+
+	  // Commit witness only when:
+	  // - got==True (must have witness)
+	  // - sandbox==false
+	  if (!sandbox && got == Outcome::True) {
+	    State st2 = witness;
+	    return apply_k_or_yield(a, q, st2, k, w, yielded);
+	  }
+
+	  // Otherwise, succeed without changing state
+	  return apply_k_or_yield(a, q, st, k, w, yielded);
+	}
+
     default:
-      return false;
+      return StepResult::NoYield;
   }
 }
 
 inline Term reify(Term t, const Binding* s) { return walk(t, s); }
 
+
+inline Outcome probe_run(Arena& a, const OutcomeSyms& syms, const Goal* sub, State start, std::uint32_t max_iter, State& witness_out) {
+  WorkQueue q;
+  const Kont* kd = kont_done(a);
+  if (!kd) return Outcome::Bounded; // treat as resource bound
+
+  Work* w0 = a.make<Work>();
+  if (!w0) return Outcome::Bounded;
+
+  w0->g = sub;
+  w0->st = start;
+  w0->k = kd;
+  q.push(w0);
+
+  for (std::uint32_t i = 0; i < max_iter; ++i) {
+    Work* w = q.pop();
+    if (!w) return Outcome::False; // exhausted search
+
+    State y{};
+    StepResult r = step(a, q, w, y, syms);
+    if (r == StepResult::Yield) {
+      witness_out = y;
+      return Outcome::True;
+    }
+    if (r == StepResult::OOM) return Outcome::Bounded;
+    // else NoYield: continue
+  }
+
+  return Outcome::Bounded;
+}
+
 template<class OnAnswer>
 inline void runN(Arena& a, int n, const Goal* query_goal, Term query_var,
-                 std::uint32_t vars_used, OnAnswer&& on_answer) {
+                 std::uint32_t vars_used, const OutcomeSyms& syms, OnAnswer&& on_answer) {
   WorkQueue q;
   const Kont* kd = kont_done(a);
   if (!kd) return;
@@ -407,11 +542,13 @@ inline void runN(Arena& a, int n, const Goal* query_goal, Term query_var,
     if (!w) break;
 
     State y{};
-    if (step(a, q, w, y)) {
+    StepResult r = step(a, q, w, y, syms);
+    if (StepResult::Yield == r) {
       Term ans = reify(query_var, y.subst);
       on_answer(ans, y);
       ++produced;
-    }
+    };
+    if (StepResult::OOM == r) break;
   }
 }
 
