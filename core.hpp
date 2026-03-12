@@ -5,6 +5,55 @@
 
 enum class StepResult : std::uint8_t { NoYield, Yield, OOM };
 
+// ---- Terms ----
+enum class TermTag : std::uint8_t { Var, BVar, Int, Sym, Nil, Pair };
+struct PairNode;
+
+struct Term {
+  TermTag tag;
+  union {
+    std::uint32_t id;        // Var or BVar
+    std::int32_t value;      // Int
+    const SymEntry* sym;     // Sym
+    const PairNode* pair;    // Pair
+  };
+
+  static Term var(std::uint32_t v)        { Term t; t.tag = TermTag::Var;  t.id = v; return t; }
+  static Term bvar(std::uint32_t k)       { Term t; t.tag = TermTag::BVar; t.id = k; return t; }
+  static Term integer(std::int32_t v)     { Term t; t.tag = TermTag::Int;  t.value = v; return t; }
+  static Term symbol(const SymEntry* s)   { Term t; t.tag = TermTag::Sym;  t.sym = s; return t; }
+  static Term nil()                       { Term t; t.tag = TermTag::Nil;  t.id = 0; return t; }
+  static Term make_pair(const PairNode* p){ Term t; t.tag = TermTag::Pair; t.pair = p; return t; }
+};
+
+struct PairNode { Term car; Term cdr; };
+
+
+// ---- Goals ----
+enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe };
+
+struct GoalEq   { Term u; Term v; };
+struct GoalBin  { const struct Goal* g1; const struct Goal* g2; };
+struct GoalFresh{ std::uint32_t n; const Goal* body; };
+
+
+struct GoalProbe{
+  const struct Goal* sub;
+  Term condition;   // must be Sym or Var already bound to Sym (true/false/insufficient/bounded)
+  Term max_iter;    // must be Int or Var already bound to Int
+  Term sandbox;     // must be Sym(true/false) or Var already bound to Sym
+  Term req_ground;  // must be Sym(true/false) or Var already bound to Sym
+};
+
+struct Goal {
+  GoalTag tag;
+  union {
+    GoalEq eq;
+    GoalBin bin;
+    GoalFresh fresh;
+    GoalProbe probe;
+  };
+};
 
 // ============================================================================
 // 4-valued outcome used by probe/meta-evaluation
@@ -44,28 +93,6 @@ inline bool sym_to_outcome(const SymEntry* s, const OutcomeSyms& syms, Outcome& 
 //   - State.env runtime stack to resolve BVar -> Var(id)
 // ============================================================================
 
-// ---- Terms ----
-enum class TermTag : std::uint8_t { Var, BVar, Int, Sym, Nil, Pair };
-struct PairNode;
-
-struct Term {
-  TermTag tag;
-  union {
-    std::uint32_t id;        // Var or BVar
-    std::int32_t value;      // Int
-    const SymEntry* sym;     // Sym
-    const PairNode* pair;    // Pair
-  };
-
-  static Term var(std::uint32_t v)        { Term t; t.tag = TermTag::Var;  t.id = v; return t; }
-  static Term bvar(std::uint32_t k)       { Term t; t.tag = TermTag::BVar; t.id = k; return t; }
-  static Term integer(std::int32_t v)     { Term t; t.tag = TermTag::Int;  t.value = v; return t; }
-  static Term symbol(const SymEntry* s)   { Term t; t.tag = TermTag::Sym;  t.sym = s; return t; }
-  static Term nil()                       { Term t; t.tag = TermTag::Nil;  t.id = 0; return t; }
-  static Term make_pair(const PairNode* p){ Term t; t.tag = TermTag::Pair; t.pair = p; return t; }
-};
-
-struct PairNode { Term car; Term cdr; };
 
 static_assert(std::is_trivially_destructible_v<Term>);
 static_assert(std::is_trivially_destructible_v<PairNode>);
@@ -133,6 +160,121 @@ inline Term eval_probe_arg(Term t, const State& st) {
   t = walk(t, st.subst);
   return t;
 }
+
+// ============================================================================
+// Ground-enough check used by probe(req_ground=true).
+// Strict v1 rules:
+//   - Any unbound Var => Insufficient
+//   - Any BVar that cannot be resolved by current env => Insufficient
+//   - Fresh/Probe nodes in the goal => Insufficient (introduces vars / meta)
+//   - Allocation failure while checking => Bounded
+// ============================================================================
+
+struct TermJob { Term t; TermJob* next; };
+struct GoalJob { const Goal* g; GoalJob* next; };
+
+inline Outcome ground_check_term(Arena& a, Term t, const State& st) {
+  TermJob* jobs = nullptr;
+
+  auto push = [&](Term x) -> bool {
+    TermJob* j = a.make<TermJob>();
+    if (!j) return false;
+    j->t = x;
+    j->next = jobs;
+    jobs = j;
+    return true;
+  };
+
+  if (!push(t)) return Outcome::Bounded;
+
+  while (jobs) {
+    TermJob* j = jobs;
+    jobs = jobs->next;
+
+    Term x = j->t;
+
+    // Resolve BVar using env, but if it's still BVar after resolution, treat as insufficient.
+    if (x.tag == TermTag::BVar) {
+      Term r = resolve_bvar(x, st.env);
+      if (r.tag == TermTag::BVar) return Outcome::Insufficient;
+      x = r;
+    }
+
+    // Apply substitution
+    x = walk(x, st.subst);
+
+    // After walking, any remaining Var is unbound => not ground
+    if (x.tag == TermTag::Var) return Outcome::Insufficient;
+
+    if (x.tag == TermTag::Pair) {
+      const PairNode* p = x.pair;
+      if (!p) return Outcome::Insufficient;
+      if (!push(p->car)) return Outcome::Bounded;
+      if (!push(p->cdr)) return Outcome::Bounded;
+      continue;
+    }
+
+    // Int/Sym/Nil are ground; ignore others
+  }
+
+  return Outcome::True;
+}
+
+inline Outcome ground_check_goal(Arena& a, const Goal* g0, const State& st) {
+  GoalJob* jobs = nullptr;
+
+  auto push = [&](const Goal* g) -> bool {
+    GoalJob* j = a.make<GoalJob>();
+    if (!j) return false;
+    j->g = g;
+    j->next = jobs;
+    jobs = j;
+    return true;
+  };
+
+  if (!g0) return Outcome::Insufficient;
+  if (!push(g0)) return Outcome::Bounded;
+
+  while (jobs) {
+    GoalJob* j = jobs;
+    jobs = jobs->next;
+
+    const Goal* g = j->g;
+    if (!g) return Outcome::Insufficient;
+
+    switch (g->tag) {
+      case GoalTag::Eq: {
+        Outcome ou = ground_check_term(a, g->eq.u, st);
+        if (ou != Outcome::True) return ou;
+        Outcome ov = ground_check_term(a, g->eq.v, st);
+        if (ov != Outcome::True) return ov;
+        break;
+      }
+
+      case GoalTag::Disj:
+      case GoalTag::Conj: {
+        if (!push(g->bin.g1)) return Outcome::Bounded;
+        if (!push(g->bin.g2)) return Outcome::Bounded;
+        break;
+      }
+
+      case GoalTag::Fresh:
+        // Strict: fresh introduces new vars, so not ground enough for now
+        return Outcome::Insufficient;
+
+      case GoalTag::Probe:
+        // Strict: do not allow meta inside meta under req_ground for now
+        return Outcome::Insufficient;
+
+      default:
+        return Outcome::Insufficient;
+    }
+  }
+
+  return Outcome::True;
+}
+
+
 // ---- Iterative unify (no recursion) ----
 struct UnifyJob { Term u; Term v; UnifyJob* next; };
 static_assert(std::is_trivially_destructible_v<UnifyJob>);
@@ -195,31 +337,7 @@ inline bool unify(Arena& a, Term u0, Term v0, const EnvFrame* env, const Binding
   return true;
 }
 
-// ---- Goals ----
-enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe };
 
-struct GoalEq   { Term u; Term v; };
-struct GoalBin  { const struct Goal* g1; const struct Goal* g2; };
-struct GoalFresh{ std::uint32_t n; const Goal* body; };
-
-
-struct GoalProbe{
-  const struct Goal* sub;
-  Term condition;   // must be Sym or Var already bound to Sym (true/false/insufficient/bounded)
-  Term max_iter;    // must be Int or Var already bound to Int
-  Term sandbox;     // must be Sym(true/false) or Var already bound to Sym
-  Term req_ground;  // must be Sym(true/false) or Var already bound to Sym
-};
-
-struct Goal {
-  GoalTag tag;
-  union {
-    GoalEq eq;
-    GoalBin bin;
-    GoalFresh fresh;
-    GoalProbe probe;
-  };
-};
 
 static_assert(std::is_trivially_destructible_v<Goal>);
 
@@ -451,19 +569,14 @@ inline StepResult step(Arena& a, WorkQueue& q, Work* w, State& yielded, const Ou
 	  }
 	  req_ground = (reqg_t.sym == syms.s_true);
 
-	  // Strict groundness check (v1): if requested and not ground enough => insufficient.
-	  // For Phase 2 we implement this conservatively as "disallow any unbound Var in the *current* state".
-	  // (We will replace this with a proper goal/term traversal in a later micro-edit.)
 	  if (req_ground) {
-	    // Conservative check: if query var 0 is unbound, treat as insufficient.
-	    // NOTE: We'll upgrade this soon; for now it is a placeholder strictness gate.
-	    Term q0 = walk(Term::var(0), st.subst);
-	    if (q0.tag == TermTag::Var) {
-	      Outcome got = Outcome::Insufficient;
-	      if (got == want) return apply_k_or_yield(a, q, st, k, w, yielded);
-	      return StepResult::NoYield;
-	    }
-	  }
+      Outcome gr = ground_check_goal(a, g->probe.sub, st);
+      if (gr != Outcome::True) {
+        Outcome got = gr; // Insufficient or Bounded
+        if (got == want) return apply_k_or_yield(a, q, st, k, w, yielded);
+        return StepResult::NoYield;
+      }
+    }
 
 	  // Run bounded probe
 	  State witness{};
