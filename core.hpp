@@ -106,6 +106,15 @@ struct Binding {
 
 static_assert(std::is_trivially_destructible_v<Binding>);
 
+struct Diseq {
+  Term u;
+  Term v;
+  const Diseq* next;
+};
+
+static_assert(std::is_trivially_destructible_v<Diseq>);
+
+
 // Runtime environment stack for bound vars (de Bruijn):
 // top frame corresponds to BVar(0), next is BVar(1), etc.
 struct EnvFrame {
@@ -117,6 +126,7 @@ static_assert(std::is_trivially_destructible_v<EnvFrame>);
 
 struct State {
   const Binding* subst;
+  const Diseq* diseqs;   // disequality constraints
   const EnvFrame* env;   // runtime env for resolving BVar
   std::uint32_t counter; // fresh var supply
 };
@@ -471,7 +481,7 @@ inline StepResult step(Arena& a, WorkQueue& q, Work* w, State& yielded, const Ou
     case GoalTag::Eq: {
       const Binding* s = st.subst;
       if (!unify(a, g->eq.u, g->eq.v, st.env, s)) return StepResult::NoYield;
-      State st2{ s, st.env, st.counter };
+      State st2{ s, st.diseqs, st.env, st.counter };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
@@ -514,7 +524,7 @@ inline StepResult step(Arena& a, WorkQueue& q, Work* w, State& yielded, const Ou
 	  }
 
 	// continue with body under extended env
-	State st2{ st.subst, env2, st.counter };
+	State st2{ st.subst, st.diseqs, env2, st.counter };
 
       // Continue with body under extended env.
       w->g = g->fresh.body;
@@ -642,7 +652,7 @@ inline void runN(Arena& a, int n, const Goal* query_goal, Term query_var,
   const Kont* kd = kont_done(a);
   if (!kd) return;
 
-  State st0{ nullptr, nullptr, vars_used };
+  State st0{ nullptr, nullptr, nullptr, vars_used };
 
   Work* w0 = a.make<Work>();
   if (!w0) return;
