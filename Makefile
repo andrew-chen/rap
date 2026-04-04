@@ -6,7 +6,7 @@ all: parse_run
 parse_run: parse_run.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-parse_run.o: parse_run.cpp sexp_parser.hpp core.hpp intern.hpp arena.hpp
+parse_run.o: parse_run.cpp core/sexp_parser.hpp core/core.hpp core/intern.hpp core/arena.hpp
 	$(CXX) $(CXXFLAGS) -c parse_run.cpp
 
 clean:
