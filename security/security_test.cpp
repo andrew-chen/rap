@@ -57,25 +57,26 @@ struct PolicyChecker {
     
     enum class Result { Permitted, Violation, Error };
     
-	Result check(const std::string& query_str) {
-	    std::printf("Query: %s\n", query_str.c_str());
-	    ParsedQuery pq = parse_query(arena, query_str.c_str());
-	    print_query(pq);
-	    if (!pq.goal) {
-		arena.reset();
-		return Result::Error;
-	    }
-	    
-	    Result result = Result::Violation;  // default: no solution = violation
-	    
-	    runN(arena, pq.n, pq.goal, pq.qvar, pq.vars_used, pq.outcome_syms,
-		[&](Term ans, State) {
-		    result = Result::Permitted;  // callback fired = permitted
-		});
-	    
-	    arena.reset();
-	    return result;
-	}
+    Result check(const std::string& query_str) {
+        ParsedQuery pq = parse_query(arena, query_str.c_str());
+        if (!pq.goal) {
+            std::printf("[check] ERROR: query failed to parse\n");
+            std::printf("[check] Query was: %s\n", query_str.c_str());
+            arena.reset();
+            return Result::Error;
+        }
+
+        Result result = Result::Violation;
+
+        runN(arena, pq.n, pq.goal, pq.qvar, pq.vars_used, pq.outcome_syms,
+            [&](Term ans, State) {
+                (void)ans;
+                result = Result::Permitted;
+            });
+
+        arena.reset();
+        return result;
+    }
 };
 
 std::string build_acl_query(const FactBase& facts, const Event& event) {
@@ -149,13 +150,13 @@ int main() {
 
     std::vector<Event> acl_events = {
         // Normal behavior
-        {Event::Type::AccessControl, "sensor-node-7",      "read",  "sensor-data"},
-        {Event::Type::AccessControl, "operator-console-2", "write", "config-data"},
-        {Event::Type::AccessControl, "gateway-node-1",     "read",  "sensor-data"},
+        {Event::Type::AccessControl, "sensor-node-7",      "read",  "sensor-data", "", "", ""},
+        {Event::Type::AccessControl, "operator-console-2", "write", "config-data", "", "", ""},
+        {Event::Type::AccessControl, "gateway-node-1",     "read",  "sensor-data", "", "", ""},
         // Violations
-        {Event::Type::AccessControl, "sensor-node-7",  "write", "firmware"},
-        {Event::Type::AccessControl, "guest-device-1", "write", "config-data"},
-        {Event::Type::AccessControl, "gateway-node-1", "write", "firmware"}
+        {Event::Type::AccessControl, "sensor-node-7",  "write", "firmware",    "", "", ""},
+        {Event::Type::AccessControl, "guest-device-1", "write", "config-data", "", "", ""},
+        {Event::Type::AccessControl, "gateway-node-1", "write", "firmware",    "", "", ""}
     };
 
     for (auto& event : acl_events) {

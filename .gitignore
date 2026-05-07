@@ -36,3 +36,7 @@ parse_run
 *.swp
 /.claude
 test_rap
+
+# Output and artifact files
+*.txt
+*.out

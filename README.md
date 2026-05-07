@@ -166,7 +166,7 @@ All targets build clean under `clang++` (or `$CXX`) with
 |------------|-----------------------------------------------------|
 | `core/`    | Complete. All features implemented and tested.      |
 | `rap/`     | Scaffolded. `RapEngine` wraps core; smoke test passes. Work queue not implemented. |
-| `security/`| Not yet started. Waiting for `core/` to stabilise (it has). |
+| `security/`  | Complete for paper. Both case studies working (ACL + network policy). 10/10 test cases correct. Needs Makefile target. |
 
 ---
 
