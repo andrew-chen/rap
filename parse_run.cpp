@@ -8,31 +8,37 @@ int main() {
   const char* program1 = "(run 10 (q) (disj (== q foo) (== q bar)))";
   const char* program2 = "(conj (== q (1 2 3)) (== q (1 2 3)))";
   const char* program3 = "(run 10 (q) (== q (a b . c)))";
-
-  // NEW: surface-language fresh; expects q unified with a fresh logic var
   const char* program4 = "(run 5 (q) (fresh (x) (== q x)))";
-
   const char* program5 = "(run 5 (q) (fresh (x y) (disj (== q x) (== q y))))";
-
   const char* program6 = "(run 1 (q) (probe (== q foo) insufficient 50 true true))";
 
-  const char* programs[] = {program1, program2, program3, program4, program5, program6};
+  const char* programs[] = {
+    program1, program2, program3, program4, program5, program6
+  };
 
-  for (const char* program : programs) {
-    std::printf("Program: %s\n", program);
+  for (const char* src : programs) {
+    std::printf("----------------------------------------\n");
+    std::printf("Program: %s\n\n", src);
 
-    ParsedQuery pq = parse_query(a, program);
+    ParsedQuery pq = parse_query(a, src);
+
+    // Always print diagnostic info — this shows parse success/failure
+    // and the compiled goal tree so we can verify structure.
+    print_query(pq);
+
     if (!pq.goal) {
-      std::printf("Parse/compile failed.\n\n");
+      std::printf("(skipping run — parse failed)\n\n");
       a.reset();
       continue;
     }
 
+    std::printf("Results:\n");
     runN(a, pq.n, pq.goal, pq.qvar, pq.vars_used, pq.outcome_syms,
-     [&] (Term ans, State /*st*/) {
-       print_term(ans);
-       std::printf("\n");
-     });
+      [&](Term ans, State /*st*/) {
+        std::printf("  ");
+        print_term(ans);
+        std::printf("\n");
+      });
 
     std::printf("\n");
     a.reset();
@@ -40,4 +46,3 @@ int main() {
 
   return 0;
 }
-

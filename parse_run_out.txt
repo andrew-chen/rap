@@ -1,0 +1,95 @@
+----------------------------------------
+Program: (run 10 (q) (disj (== q foo) (== q bar)))
+
+=== parse_query diagnostic ===
+Status:    OK
+n:         10
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (disj (== _.0 foo)
+        (== _.0 bar))
+==============================
+
+Results:
+  foo
+  bar
+
+----------------------------------------
+Program: (conj (== q (1 2 3)) (== q (1 2 3)))
+
+=== parse_query diagnostic ===
+Status:    OK
+n:         10
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (conj (== _.0 (1 2 3))
+        (== _.0 (1 2 3)))
+==============================
+
+Results:
+  (1 2 3)
+
+----------------------------------------
+Program: (run 10 (q) (== q (a b . c)))
+
+=== parse_query diagnostic ===
+Status:    OK
+n:         10
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (== _.0 (a b . c))
+==============================
+
+Results:
+  (a b . c)
+
+----------------------------------------
+Program: (run 5 (q) (fresh (x) (== q x)))
+
+=== parse_query diagnostic ===
+Status:    OK
+n:         5
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (fresh/1 (== _.0 b_.0))
+==============================
+
+Results:
+  _.1
+
+----------------------------------------
+Program: (run 5 (q) (fresh (x y) (disj (== q x) (== q y))))
+
+=== parse_query diagnostic ===
+Status:    OK
+n:         5
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (fresh/2 (disj (== _.0 b_.1)
+                 (== _.0 b_.0)))
+==============================
+
+Results:
+  _.1
+  _.2
+
+----------------------------------------
+Program: (run 1 (q) (probe (== q foo) insufficient 50 true true))
+
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (== _.0 foo) insufficient 50 true true)
+==============================
+
+Results:
+  _.0
+

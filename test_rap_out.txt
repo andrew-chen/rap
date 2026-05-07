@@ -1,0 +1,3 @@
+answer: ok
+answer: fail
+PASS: got 2 answer(s)

@@ -134,38 +134,6 @@ inline SexpCell* make_cell(Arena& a, const Sexp* car) {
   return c;
 }
 
-// ============================================================================
-// print_sexp: print a parsed Sexp tree as readable s-expression.
-// Forward-declared here; defined after parse_sexp.
-// Used by diagnostic error messages in compile_goal.
-// ============================================================================
-inline void print_sexp(const Sexp* x);
-
-inline void print_sexp_list(const SexpCell* c, const Sexp* dotted) {
-  std::printf("(");
-  bool first = true;
-  for (; c; c = c->cdr) {
-    if (!first) std::printf(" ");
-    print_sexp(c->car);
-    first = false;
-  }
-  if (dotted) {
-    std::printf(" . ");
-    print_sexp(dotted);
-  }
-  std::printf(")");
-}
-
-inline void print_sexp(const Sexp* x) {
-  if (!x) { std::printf("<null-sexp>"); return; }
-  switch (x->tag) {
-    case SexpTag::Int:  std::printf("%d", x->i); break;
-    case SexpTag::Sym:  std::printf("%s", x->sym ? x->sym->str : "<null-sym>"); break;
-    case SexpTag::List: print_sexp_list(x->list.head, x->list.dotted); break;
-    default:            std::printf("<unknown-sexp>"); break;
-  }
-}
-
 // Iterative parse of exactly one s-expression.
 inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
   ListFrame* frame = nullptr;
@@ -343,39 +311,16 @@ inline Term compile_term(Arena& a, const GlobalBind* genv, const BoundBind* benv
 // Compile Sexp -> Goal (supports n-ary conj/disj by folding, plus fresh)
 // ============================================================================
 inline const Goal* compile_goal(Arena& a, const GlobalBind* genv, const BoundBind* benv, const Sexp* x) {
-  if (!x) {
-    std::printf("[compile_goal] ERROR: null sexp\n");
-    return nullptr;
-  }
-  if (x->tag != SexpTag::List) {
-    std::printf("[compile_goal] ERROR: expected list, got ");
-    print_sexp(x);
-    std::printf("\n");
-    return nullptr;
-  }
+  if (!x || x->tag != SexpTag::List) return nullptr;
 
   const SexpCell* c = x->list.head;
-  if (!c || !c->car) {
-    std::printf("[compile_goal] ERROR: empty list or null head\n");
-    return nullptr;
-  }
-  if (c->car->tag != SexpTag::Sym) {
-    std::printf("[compile_goal] ERROR: goal head is not a symbol, got ");
-    print_sexp(c->car);
-    std::printf("\n");
-    return nullptr;
-  }
+  if (!c || !c->car || c->car->tag != SexpTag::Sym) return nullptr;
 
   const SymEntry* op = c->car->sym;
   c = c->cdr;
 
   if (sym_lit_eq(op, "==")) {
-    if (!c || !c->cdr || c->cdr->cdr) {
-      std::printf("[compile_goal] ERROR: '==' requires exactly 2 args, got: ");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!c || !c->cdr || c->cdr->cdr) return nullptr; // exactly 2 args
     Term u = compile_term(a, genv, benv, c->car);
     Term v = compile_term(a, genv, benv, c->cdr->car);
     return make_eq(a, u, v);
@@ -383,136 +328,62 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv, const BoundBin
 
   if (sym_lit_eq(op, "fresh")) {
     // syntax: (fresh (x y ...) GOAL)
-    if (!c || !c->car || c->car->tag != SexpTag::List) {
-      std::printf("[compile_goal] ERROR: 'fresh' requires a variable list as first arg: ");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!c || !c->car || c->car->tag != SexpTag::List) return nullptr;
     const Sexp* vlist = c->car;
     const SexpCell* vc = vlist->list.head;
-    if (!vc) {
-      std::printf("[compile_goal] ERROR: 'fresh' variable list is empty: ");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!vc) return nullptr;
 
     // collect names (cap at 64 just to keep it bounded)
     const SymEntry* names[64];
     std::uint32_t n = 0;
     for (; vc; vc = vc->cdr) {
-      if (!vc->car || vc->car->tag != SexpTag::Sym) {
-        std::printf("[compile_goal] ERROR: 'fresh' variable list contains non-symbol: ");
-        print_sexp(vlist);
-        std::printf("\n");
-        return nullptr;
-      }
-      if (n >= 64) {
-        std::printf("[compile_goal] ERROR: 'fresh' variable list exceeds 64 names\n");
-        return nullptr;
-      }
+      if (!vc->car || vc->car->tag != SexpTag::Sym) return nullptr;
+      if (n >= 64) return nullptr;
       names[n++] = vc->car->sym;
     }
 
     c = c->cdr;
-    if (!c || !c->car) {
-      std::printf("[compile_goal] ERROR: 'fresh' has no body goal: ");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
-    if (c->cdr) {
-      std::printf("[compile_goal] ERROR: 'fresh' requires exactly one body goal "
-                  "(got multiple — wrap in conj): ");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!c || !c->car || c->cdr) return nullptr; // exactly one body goal
 
     // Extend bound env by pushing in order: x then y => y becomes depth 0 in body.
     const BoundBind* benv2 = benv;
     for (std::uint32_t i = 0; i < n; ++i) {
       benv2 = bound_push(a, benv2, names[i]);
-      if (!benv2) {
-        std::printf("[compile_goal] ERROR: OOM pushing bound variable '%s'\n", names[i]->str);
-        return nullptr;
-      }
+      if (!benv2) return nullptr;
     }
 
     const Goal* body = compile_goal(a, genv, benv2, c->car);
-    if (!body) {
-      // compile_goal already printed a diagnostic for the inner failure
-      std::printf("[compile_goal] ERROR: 'fresh' body failed to compile: ");
-      print_sexp(c->car);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!body) return nullptr;
 
-    // One n-ary Fresh node
-    return make_fresh(a, n, body);
+	// One n-ary Fresh node
+	return make_fresh(a, n, body);
   }
 
   if (sym_lit_eq(op, "disj") || sym_lit_eq(op, "conj")) {
     const bool is_disj = sym_lit_eq(op, "disj");
-    if (!c || !c->cdr) {
-      std::printf("[compile_goal] ERROR: '%s' requires at least 2 args: ",
-                  is_disj ? "disj" : "conj");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!c || !c->cdr) return nullptr; // at least 2
 
     const Goal* acc = compile_goal(a, genv, benv, c->car);
-    if (!acc) {
-      std::printf("[compile_goal] ERROR: '%s' first arg failed to compile: ",
-                  is_disj ? "disj" : "conj");
-      print_sexp(c->car);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!acc) return nullptr;
     c = c->cdr;
 
-    std::uint32_t arg_idx = 1;
     while (c) {
       const Goal* rhs = compile_goal(a, genv, benv, c->car);
-      if (!rhs) {
-        std::printf("[compile_goal] ERROR: '%s' arg %u failed to compile: ",
-                    is_disj ? "disj" : "conj", arg_idx);
-        print_sexp(c->car);
-        std::printf("\n");
-        return nullptr;
-      }
+      if (!rhs) return nullptr;
       acc = is_disj ? make_disj(a, acc, rhs) : make_conj(a, acc, rhs);
-      if (!acc) {
-        std::printf("[compile_goal] ERROR: OOM allocating '%s' node\n",
-                    is_disj ? "disj" : "conj");
-        return nullptr;
-      }
+      if (!acc) return nullptr;
       c = c->cdr;
-      ++arg_idx;
     }
     return acc;
   }
 
   if (sym_lit_eq(op, "probe")) {
     // syntax: (probe GOAL CONDITION MAX_ITER SANDBOX REQ_GROUND)
-    if (!c || !c->cdr || !c->cdr->cdr || !c->cdr->cdr->cdr ||
-        !c->cdr->cdr->cdr->cdr || c->cdr->cdr->cdr->cdr->cdr) {
-      std::printf("[compile_goal] ERROR: 'probe' requires exactly 5 args "
-                  "(GOAL CONDITION MAX_ITER SANDBOX REQ_GROUND): ");
-      print_sexp(x);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!c || !c->cdr || !c->cdr->cdr || !c->cdr->cdr->cdr || !c->cdr->cdr->cdr->cdr || c->cdr->cdr->cdr->cdr->cdr)
+      return nullptr; // exactly 5 args
 
     const Goal* sub = compile_goal(a, genv, benv, c->car);
-    if (!sub) {
-      std::printf("[compile_goal] ERROR: 'probe' sub-goal failed to compile: ");
-      print_sexp(c->car);
-      std::printf("\n");
-      return nullptr;
-    }
+    if (!sub) return nullptr;
 
     Term condition = compile_term(a, genv, benv, c->cdr->car);
     Term max_iter  = compile_term(a, genv, benv, c->cdr->cdr->car);
@@ -522,11 +393,6 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv, const BoundBin
     return make_probe(a, sub, condition, max_iter, sandbox, req_ground);
   }
 
-  // Unrecognized operator — the most common silent failure point
-  std::printf("[compile_goal] ERROR: unrecognized goal operator '%s' in: ",
-              op->str);
-  print_sexp(x);
-  std::printf("\n");
   return nullptr;
 }
 
@@ -542,6 +408,7 @@ struct ParsedQuery {
 
   // Interned symbols for 4-valued outcomes (per run)
   OutcomeSyms outcome_syms;
+
 };
 
 inline ParsedQuery parse_query(Arena& a, const char* src) {
@@ -552,81 +419,51 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
   out.goal = nullptr;
   out.intern = Intern{0, nullptr};
 
-  if (!intern_init(a, out.intern, 256)) {
-    std::printf("[parse_query] ERROR: intern_init failed (OOM?)\n");
-    return out;
-  }
+  if (!intern_init(a, out.intern, 256)) return out;
 
   // Intern the 4-valued outcome symbols for this run
-  out.outcome_syms.s_true         = intern_cstr(a, out.intern, "true");
-  out.outcome_syms.s_false        = intern_cstr(a, out.intern, "false");
-  out.outcome_syms.s_insufficient = intern_cstr(a, out.intern, "insufficient");
-  out.outcome_syms.s_bounded      = intern_cstr(a, out.intern, "bounded");
-  if (!out.outcome_syms.s_true || !out.outcome_syms.s_false ||
-      !out.outcome_syms.s_insufficient || !out.outcome_syms.s_bounded) {
-    std::printf("[parse_query] ERROR: failed to intern outcome symbols (OOM?)\n");
-    out.goal = nullptr;
-    return out;
-  }
+  out.outcome_syms.s_true        = intern_cstr(a, out.intern, "true");
+  out.outcome_syms.s_false       = intern_cstr(a, out.intern, "false");
+  out.outcome_syms.s_insufficient= intern_cstr(a, out.intern, "insufficient");
+  out.outcome_syms.s_bounded     = intern_cstr(a, out.intern, "bounded");
+  if (!out.outcome_syms.s_true || !out.outcome_syms.s_false || !out.outcome_syms.s_insufficient || !out.outcome_syms.s_bounded) {
+	  out.goal = nullptr;
+	  return out;
+	}
 
   Lexer lx{src};
   Token tok = lx.next();
   const Sexp* top = parse_sexp(a, out.intern, lx, tok);
-  if (!top) {
-    std::printf("[parse_query] ERROR: parse_sexp failed — malformed s-expression\n");
-    std::printf("[parse_query] Source: %s\n", src);
-    return out;
-  }
+  if (!top) return out;
 
   // (run N (q) GOAL)
   if (top->tag == SexpTag::List) {
     const SexpCell* c = top->list.head;
     if (c && c->car && c->car->tag == SexpTag::Sym && sym_lit_eq(c->car->sym, "run")) {
       c = c->cdr;
-      if (!c || !c->car || c->car->tag != SexpTag::Int) {
-        std::printf("[parse_query] ERROR: 'run' requires an integer count as second element\n");
-        return out;
-      }
+      if (!c || !c->car || c->car->tag != SexpTag::Int) return out;
       out.n = c->car->i;
       c = c->cdr;
 
       // (q) one query var
-      if (!c || !c->car || c->car->tag != SexpTag::List) {
-        std::printf("[parse_query] ERROR: 'run' requires a variable list as third element, e.g. (q)\n");
-        return out;
-      }
+      if (!c || !c->car || c->car->tag != SexpTag::List) return out;
       const Sexp* qlist = c->car;
       const SexpCell* qcells = qlist->list.head;
-      if (!qcells || qcells->cdr) {
-        std::printf("[parse_query] ERROR: 'run' variable list must contain exactly one variable\n");
-        return out;
-      }
-      if (!qcells->car || qcells->car->tag != SexpTag::Sym) {
-        std::printf("[parse_query] ERROR: 'run' query variable must be a symbol\n");
-        return out;
-      }
+      if (!qcells || qcells->cdr) return out;
+      if (!qcells->car || qcells->car->tag != SexpTag::Sym) return out;
 
       // global env: q -> Var(0)
       const GlobalBind* genv = nullptr;
       genv = global_add(a, genv, qcells->car->sym, 0);
-      if (!genv) {
-        std::printf("[parse_query] ERROR: OOM adding query variable to global env\n");
-        return out;
-      }
+      if (!genv) return out;
 
       out.qvar = Term::var(0);
       out.vars_used = 1;
 
       c = c->cdr;
-      if (!c || !c->car) {
-        std::printf("[parse_query] ERROR: 'run' has no goal\n");
-        return out;
-      }
+      if (!c || !c->car) return out;
 
       out.goal = compile_goal(a, genv, nullptr, c->car);
-      if (!out.goal) {
-        std::printf("[parse_query] ERROR: goal compilation failed (see above for details)\n");
-      }
       return out;
     }
   }
@@ -636,9 +473,6 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
   const GlobalBind* genv = nullptr;
   genv = global_add(a, genv, qsym, 0);
   out.goal = compile_goal(a, genv, nullptr, top);
-  if (!out.goal) {
-    std::printf("[parse_query] ERROR: goal compilation failed (see above for details)\n");
-  }
   return out;
 }
 
@@ -674,7 +508,7 @@ inline void print_term(Term t) {
     case TermTag::Int:  std::printf("%d", t.value); break;
     case TermTag::Nil:  std::printf("()"); break;
     case TermTag::Var:  std::printf("_.%u", t.id); break;
-    case TermTag::BVar: std::printf("b_.%u", t.id); break;
+    case TermTag::BVar: std::printf("b_.%u", t.id); break; // should rarely appear at output
     case TermTag::Sym:  std::printf("%s", t.sym ? t.sym->str : "<sym?>"); break;
     case TermTag::Pair: print_list(t); break;
     default:            std::printf("<term?>"); break;
@@ -683,13 +517,19 @@ inline void print_term(Term t) {
 
 // ============================================================================
 // Goal printing: print_goal / print_query
+// Add this block at the end of sexp_parser.hpp, after print_term.
 //
 // print_goal: prints a compiled Goal tree back as a readable s-expression.
 // print_query: prints a ParsedQuery (parse status + reconstructed goal).
 //
+// These are diagnostic/debugging tools. They reconstruct the surface syntax
+// from the compiled goal tree, which lets you verify that parse_query
+// produced the structure you expected.
+//
 // Notes:
-//   - BVar indices are printed as b_.N (de Bruijn depth from innermost)
-//   - Var ids are printed as _.N
+//   - BVar indices are printed as b0, b1, ... (de Bruijn depth from innermost)
+//   - Var ids are printed as _.N (same as print_term)
+//   - Probe condition/max_iter/sandbox/req_ground are printed as terms
 //   - Disj/Conj are always printed binary (as compiled), not n-ary
 //     (the surface syntax folds n-ary to binary at compile time)
 // ============================================================================
@@ -701,6 +541,7 @@ inline void print_goal(const Goal* g, int indent = 0) {
   }
 
   switch (g->tag) {
+
     case GoalTag::Eq:
       std::printf("(== ");
       print_term(g->eq.u);
@@ -752,7 +593,9 @@ inline void print_goal(const Goal* g, int indent = 0) {
 }
 
 // print_query: prints full diagnostic info for a ParsedQuery.
-// Call immediately after parse_query to verify parse success and structure.
+// Shows parse status, query variable, vars_used, and the compiled goal tree.
+// Use this immediately after parse_query to verify the parse succeeded and
+// produced the expected structure.
 //
 // Usage:
 //   ParsedQuery pq = parse_query(a, src);

@@ -1,0 +1,183 @@
+=== Case Study 1: Access Control ===
+
+Query: (run 1 (q) (probe (fresh (r) (conj (disj (== (list role sensor-node-7 sensor) (list role sensor-node-7 r)) (== (list role operator-console-2 operator) (list role sensor-node-7 r)) (== (list role gateway-node-1 gateway) (list role sensor-node-7 r)) (== (list role guest-device-1 guest) (list role sensor-node-7 r)) ) (disj (== (list allow sensor read sensor-data) (list allow r read sensor-data)) (== (list allow operator read config-data) (list allow r read sensor-data)) (== (list allow operator write config-data) (list allow r read sensor-data)) (== (list allow gateway read sensor-data) (list allow r read sensor-data)) (== (list allow guest read public-data) (list allow r read sensor-data)) ) (== q r))) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (fresh/1 (conj (conj (disj (disj (disj (== (list role sensor-node-7 sensor) (list role sensor-node-7 b_.0))
+                                                (== (list role operator-console-2 operator) (list role sensor-node-7 b_.0)))
+                                          (== (list role gateway-node-1 gateway) (list role sensor-node-7 b_.0)))
+                                    (== (list role guest-device-1 guest) (list role sensor-node-7 b_.0)))
+                              (disj (disj (disj (disj (== (list allow sensor read sensor-data) (list allow b_.0 read sensor-data))
+                                                      (== (list allow operator read config-data) (list allow b_.0 read sensor-data)))
+                                                (== (list allow operator write config-data) (list allow b_.0 read sensor-data)))
+                                          (== (list allow gateway read sensor-data) (list allow b_.0 read sensor-data)))
+                                    (== (list allow guest read public-data) (list allow b_.0 read sensor-data))))
+                        (== _.0 b_.0))) true 100 true false)
+==============================
+
+  (137.0 µs)
+request(sensor-node-7, read, sensor-data) => PERMITTED
+Query: (run 1 (q) (probe (fresh (r) (conj (disj (== (list role sensor-node-7 sensor) (list role operator-console-2 r)) (== (list role operator-console-2 operator) (list role operator-console-2 r)) (== (list role gateway-node-1 gateway) (list role operator-console-2 r)) (== (list role guest-device-1 guest) (list role operator-console-2 r)) ) (disj (== (list allow sensor read sensor-data) (list allow r write config-data)) (== (list allow operator read config-data) (list allow r write config-data)) (== (list allow operator write config-data) (list allow r write config-data)) (== (list allow gateway read sensor-data) (list allow r write config-data)) (== (list allow guest read public-data) (list allow r write config-data)) ) (== q r))) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (fresh/1 (conj (conj (disj (disj (disj (== (list role sensor-node-7 sensor) (list role operator-console-2 b_.0))
+                                                (== (list role operator-console-2 operator) (list role operator-console-2 b_.0)))
+                                          (== (list role gateway-node-1 gateway) (list role operator-console-2 b_.0)))
+                                    (== (list role guest-device-1 guest) (list role operator-console-2 b_.0)))
+                              (disj (disj (disj (disj (== (list allow sensor read sensor-data) (list allow b_.0 write config-data))
+                                                      (== (list allow operator read config-data) (list allow b_.0 write config-data)))
+                                                (== (list allow operator write config-data) (list allow b_.0 write config-data)))
+                                          (== (list allow gateway read sensor-data) (list allow b_.0 write config-data)))
+                                    (== (list allow guest read public-data) (list allow b_.0 write config-data))))
+                        (== _.0 b_.0))) true 100 true false)
+==============================
+
+  (172.0 µs)
+request(operator-console-2, write, config-data) => PERMITTED
+Query: (run 1 (q) (probe (fresh (r) (conj (disj (== (list role sensor-node-7 sensor) (list role gateway-node-1 r)) (== (list role operator-console-2 operator) (list role gateway-node-1 r)) (== (list role gateway-node-1 gateway) (list role gateway-node-1 r)) (== (list role guest-device-1 guest) (list role gateway-node-1 r)) ) (disj (== (list allow sensor read sensor-data) (list allow r read sensor-data)) (== (list allow operator read config-data) (list allow r read sensor-data)) (== (list allow operator write config-data) (list allow r read sensor-data)) (== (list allow gateway read sensor-data) (list allow r read sensor-data)) (== (list allow guest read public-data) (list allow r read sensor-data)) ) (== q r))) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (fresh/1 (conj (conj (disj (disj (disj (== (list role sensor-node-7 sensor) (list role gateway-node-1 b_.0))
+                                                (== (list role operator-console-2 operator) (list role gateway-node-1 b_.0)))
+                                          (== (list role gateway-node-1 gateway) (list role gateway-node-1 b_.0)))
+                                    (== (list role guest-device-1 guest) (list role gateway-node-1 b_.0)))
+                              (disj (disj (disj (disj (== (list allow sensor read sensor-data) (list allow b_.0 read sensor-data))
+                                                      (== (list allow operator read config-data) (list allow b_.0 read sensor-data)))
+                                                (== (list allow operator write config-data) (list allow b_.0 read sensor-data)))
+                                          (== (list allow gateway read sensor-data) (list allow b_.0 read sensor-data)))
+                                    (== (list allow guest read public-data) (list allow b_.0 read sensor-data))))
+                        (== _.0 b_.0))) true 100 true false)
+==============================
+
+  (102.0 µs)
+request(gateway-node-1, read, sensor-data) => PERMITTED
+Query: (run 1 (q) (probe (fresh (r) (conj (disj (== (list role sensor-node-7 sensor) (list role sensor-node-7 r)) (== (list role operator-console-2 operator) (list role sensor-node-7 r)) (== (list role gateway-node-1 gateway) (list role sensor-node-7 r)) (== (list role guest-device-1 guest) (list role sensor-node-7 r)) ) (disj (== (list allow sensor read sensor-data) (list allow r write firmware)) (== (list allow operator read config-data) (list allow r write firmware)) (== (list allow operator write config-data) (list allow r write firmware)) (== (list allow gateway read sensor-data) (list allow r write firmware)) (== (list allow guest read public-data) (list allow r write firmware)) ) (== q r))) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (fresh/1 (conj (conj (disj (disj (disj (== (list role sensor-node-7 sensor) (list role sensor-node-7 b_.0))
+                                                (== (list role operator-console-2 operator) (list role sensor-node-7 b_.0)))
+                                          (== (list role gateway-node-1 gateway) (list role sensor-node-7 b_.0)))
+                                    (== (list role guest-device-1 guest) (list role sensor-node-7 b_.0)))
+                              (disj (disj (disj (disj (== (list allow sensor read sensor-data) (list allow b_.0 write firmware))
+                                                      (== (list allow operator read config-data) (list allow b_.0 write firmware)))
+                                                (== (list allow operator write config-data) (list allow b_.0 write firmware)))
+                                          (== (list allow gateway read sensor-data) (list allow b_.0 write firmware)))
+                                    (== (list allow guest read public-data) (list allow b_.0 write firmware))))
+                        (== _.0 b_.0))) true 100 true false)
+==============================
+
+  (121.0 µs)
+request(sensor-node-7, write, firmware) => VIOLATION -- device: sensor-node-7, action: write, resource: firmware
+Query: (run 1 (q) (probe (fresh (r) (conj (disj (== (list role sensor-node-7 sensor) (list role guest-device-1 r)) (== (list role operator-console-2 operator) (list role guest-device-1 r)) (== (list role gateway-node-1 gateway) (list role guest-device-1 r)) (== (list role guest-device-1 guest) (list role guest-device-1 r)) ) (disj (== (list allow sensor read sensor-data) (list allow r write config-data)) (== (list allow operator read config-data) (list allow r write config-data)) (== (list allow operator write config-data) (list allow r write config-data)) (== (list allow gateway read sensor-data) (list allow r write config-data)) (== (list allow guest read public-data) (list allow r write config-data)) ) (== q r))) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (fresh/1 (conj (conj (disj (disj (disj (== (list role sensor-node-7 sensor) (list role guest-device-1 b_.0))
+                                                (== (list role operator-console-2 operator) (list role guest-device-1 b_.0)))
+                                          (== (list role gateway-node-1 gateway) (list role guest-device-1 b_.0)))
+                                    (== (list role guest-device-1 guest) (list role guest-device-1 b_.0)))
+                              (disj (disj (disj (disj (== (list allow sensor read sensor-data) (list allow b_.0 write config-data))
+                                                      (== (list allow operator read config-data) (list allow b_.0 write config-data)))
+                                                (== (list allow operator write config-data) (list allow b_.0 write config-data)))
+                                          (== (list allow gateway read sensor-data) (list allow b_.0 write config-data)))
+                                    (== (list allow guest read public-data) (list allow b_.0 write config-data))))
+                        (== _.0 b_.0))) true 100 true false)
+==============================
+
+  (103.0 µs)
+request(guest-device-1, write, config-data) => VIOLATION -- device: guest-device-1, action: write, resource: config-data
+Query: (run 1 (q) (probe (fresh (r) (conj (disj (== (list role sensor-node-7 sensor) (list role gateway-node-1 r)) (== (list role operator-console-2 operator) (list role gateway-node-1 r)) (== (list role gateway-node-1 gateway) (list role gateway-node-1 r)) (== (list role guest-device-1 guest) (list role gateway-node-1 r)) ) (disj (== (list allow sensor read sensor-data) (list allow r write firmware)) (== (list allow operator read config-data) (list allow r write firmware)) (== (list allow operator write config-data) (list allow r write firmware)) (== (list allow gateway read sensor-data) (list allow r write firmware)) (== (list allow guest read public-data) (list allow r write firmware)) ) (== q r))) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (fresh/1 (conj (conj (disj (disj (disj (== (list role sensor-node-7 sensor) (list role gateway-node-1 b_.0))
+                                                (== (list role operator-console-2 operator) (list role gateway-node-1 b_.0)))
+                                          (== (list role gateway-node-1 gateway) (list role gateway-node-1 b_.0)))
+                                    (== (list role guest-device-1 guest) (list role gateway-node-1 b_.0)))
+                              (disj (disj (disj (disj (== (list allow sensor read sensor-data) (list allow b_.0 write firmware))
+                                                      (== (list allow operator read config-data) (list allow b_.0 write firmware)))
+                                                (== (list allow operator write config-data) (list allow b_.0 write firmware)))
+                                          (== (list allow gateway read sensor-data) (list allow b_.0 write firmware)))
+                                    (== (list allow guest read public-data) (list allow b_.0 write firmware))))
+                        (== _.0 b_.0))) true 100 true false)
+==============================
+
+  (119.0 µs)
+request(gateway-node-1, write, firmware) => VIOLATION -- device: gateway-node-1, action: write, resource: firmware
+
+=== Case Study 2: Network Policy ===
+
+Query: (run 1 (q) (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow sensor-node-7 gateway-node-1 5683)) (== (list allow gateway-node-1 cloud-service-A 443) (list allow sensor-node-7 gateway-node-1 5683)) ) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow sensor-node-7 gateway-node-1 5683))
+               (== (list allow gateway-node-1 cloud-service-A 443) (list allow sensor-node-7 gateway-node-1 5683))) true 100 true false)
+==============================
+
+  (31.0 µs)
+send(sensor-node-7, gateway-node-1, 5683) => PERMITTED
+Query: (run 1 (q) (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow gateway-node-1 cloud-service-A 443)) (== (list allow gateway-node-1 cloud-service-A 443) (list allow gateway-node-1 cloud-service-A 443)) ) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow gateway-node-1 cloud-service-A 443))
+               (== (list allow gateway-node-1 cloud-service-A 443) (list allow gateway-node-1 cloud-service-A 443))) true 100 true false)
+==============================
+
+  (31.0 µs)
+send(gateway-node-1, cloud-service-A, 443) => PERMITTED
+Query: (run 1 (q) (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow sensor-node-7 cloud-service-A 443)) (== (list allow gateway-node-1 cloud-service-A 443) (list allow sensor-node-7 cloud-service-A 443)) ) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow sensor-node-7 cloud-service-A 443))
+               (== (list allow gateway-node-1 cloud-service-A 443) (list allow sensor-node-7 cloud-service-A 443))) true 100 true false)
+==============================
+
+  (30.0 µs)
+send(sensor-node-7, cloud-service-A, 443) => VIOLATION -- source: sensor-node-7, destination: cloud-service-A, port: 443
+Query: (run 1 (q) (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow external-device-9 sensor-node-7 22)) (== (list allow gateway-node-1 cloud-service-A 443) (list allow external-device-9 sensor-node-7 22)) ) true 100 true false))
+=== parse_query diagnostic ===
+Status:    OK
+n:         1
+vars_used: 1
+qvar:      _.0
+Goal tree:
+  (probe (disj (== (list allow sensor-node-7 gateway-node-1 5683) (list allow external-device-9 sensor-node-7 22))
+               (== (list allow gateway-node-1 cloud-service-A 443) (list allow external-device-9 sensor-node-7 22))) true 100 true false)
+==============================
+
+  (30.0 µs)
+send(external-device-9, sensor-node-7, 22) => VIOLATION -- source: external-device-9, destination: sensor-node-7, port: 22
