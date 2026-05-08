@@ -330,6 +330,21 @@ case GoalTag::Call: {
 
 **Threading `rel_env` through `step()`:**
 
+**Walk behavior for Sym terms:**
+
+`walk` currently follows `Var` chains only. For the dispatch chain and mutual
+recursion via `fresh` to work correctly, `walk` must also resolve `Sym` terms
+through `rel_env`. Add a final step to `walk`: after the standard variable
+chain traversal, if the result is a `Sym` and `rel_env.lookup(sym)` returns a
+`Rel` term, return that `Rel` term. This means a symbol that names a top-level
+relation resolves to its `Rel` term anywhere `walk` is called, not only in
+`step()`. This is consistent with the unified symbol treatment — symbols are
+constants unless they name a relation, in which case they resolve to it.
+
+The `walk` signature must therefore also take `const RelEnv& rel_env`. All
+call sites that currently pass only `subst` to `walk` must be updated to also
+pass `rel_env`.
+
 Add `const RelEnv& rel_env` as a parameter to `step()`, `runN()`, and
 `probe_run()`. Pass `pq.rel_env` at all call sites. For programs with no
 `defrel`, the default-constructed empty `RelEnv` is passed — no behavior
@@ -386,8 +401,18 @@ This makes mutual recursion via `fresh` work without any special mechanism:
 ### Parsing `(rel (params...) body)`
 
 1. Parse the parameter list
-2. Build a **fresh** `BoundBind` starting from `nullptr` (not from the
-   current `benv`) — enforces the closed-relation property at compile time
+2. Build the body's `BoundBind` scope as follows:
+   - Start from `nullptr` (not the current `benv` directly)
+   - For each entry in the current `benv`, add a corresponding entry to
+     the body's `genv` (not `benv`) mapping the name to a fresh `Var` ID
+     allocated from the current `vars_used` counter
+   - Then push each parameter name onto the body's fresh `BoundBind`
+   This means outer `fresh` variable names are visible inside the `rel`
+   body as `Var` references (not `BVar`), so at runtime they walk through
+   the substitution and find whatever `Rel` term was bound via `==`.
+   Parameters remain as `BVar` indices. This is not a full closure —
+   the body cannot see the caller's substitution directly, only the
+   names of variables introduced by enclosing `fresh` forms.
 3. Push each parameter name onto the fresh scope
 4. Compile `body` under this fresh scope:
    - Parameters → `BVar(k)`
@@ -395,6 +420,12 @@ This makes mutual recursion via `fresh` work without any special mechanism:
    - Everything else → `Term::symbol(sym)`
 5. Allocate `RelNode{param_count, body}` in the arena
 6. Return `Term::relation(rel_node)`
+
+**Why this fixes mutual recursion via `fresh`:**
+Inside `(rel (n) (call oddo n))`, `oddo` is in the outer `benv`. With
+this change it compiles to `Var(k)` rather than `Term::symbol(oddo_sym)`.
+At runtime, `walk(Var(k), subst)` finds the `Rel` term bound by
+`(== oddo (rel ...))` through the normal substitution chain.
 
 ### Parsing `(call f arg1 arg2 ...)`
 

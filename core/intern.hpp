@@ -1,4 +1,5 @@
 #pragma once
+#include "mktypes.hpp"
 #include "arena.hpp"
 #include <cstdint>
 
@@ -8,8 +9,9 @@
 struct SymEntry {
   std::uint32_t hash;
   std::uint32_t len;
-  const char* str;          // NUL-terminated in arena
-  const SymEntry* next;     // chaining
+  const char*      str;          // NUL-terminated in arena
+  const SymEntry*  next;         // chaining
+  const RelNode*   rel_cache = nullptr; // Stage 0A: set once by RelEnv::define()
 };
 
 struct Intern {
@@ -66,7 +68,7 @@ inline const SymEntry* intern_sym(Arena& a, Intern& in, const char* s, std::uint
 
   SymEntry* ne = a.make<SymEntry>();
   if (!ne) return nullptr;
-  *ne = SymEntry{h, len, copy, in.buckets[idx]};
+  *ne = SymEntry{h, len, copy, in.buckets[idx], nullptr};
   in.buckets[idx] = ne;
   return ne;
 }
