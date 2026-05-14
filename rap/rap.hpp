@@ -18,22 +18,32 @@
 
 class RapEvaluator : public Evaluator {
 public:
-  RapEvaluator(Arena* arena, Intern* intern, const OutcomeSyms* syms)
-    : Evaluator(arena, syms)
+  // Two-arena constructor: working_arena is used by runN (reset between queries),
+  // permanent_arena holds the interned relation-name SymEntries and the
+  // client-region buffer (must NOT be reset between queries).
+  RapEvaluator(Arena* working_arena, Arena* permanent_arena,
+               Intern* intern, const OutcomeSyms* syms)
+    : Evaluator(working_arena, syms)
   {
-    // Intern relation names once; compare by pointer identity at runtime.
-    sym_no_ops_    = intern_cstr(*arena, *intern, "no-ops");
-    sym_cons_ops_  = intern_cstr(*arena, *intern, "cons-ops");
-    sym_empty_ops_ = intern_cstr(*arena, *intern, "empty-ops");
+    // Intern relation names once into the permanent arena so they survive
+    // eval_arena resets.  Uses pointer-identity comparison at runtime.
+    sym_no_ops_    = intern_cstr(*permanent_arena, *intern, "no-ops");
+    sym_cons_ops_  = intern_cstr(*permanent_arena, *intern, "cons-ops");
+    sym_empty_ops_ = intern_cstr(*permanent_arena, *intern, "empty-ops");
 
-    // Allocate the client region from the main arena.
+    // Allocate the client region from the permanent arena.
     std::uint8_t* region_base = static_cast<std::uint8_t*>(
-        arena->alloc(MAX_CHANGESET_ARENA, alignof(std::max_align_t)));
+        permanent_arena->alloc(MAX_CHANGESET_ARENA, alignof(std::max_align_t)));
     client_region_.id       = ClientId::RAP;
     client_region_.base     = region_base;
     client_region_.capacity = MAX_CHANGESET_ARENA;
     client_region_.offset   = 0;
   }
+
+  // Single-arena constructor (backward-compatible): both working and permanent
+  // allocations use the same arena.  Fine for callers that never reset the arena.
+  RapEvaluator(Arena* arena, Intern* intern, const OutcomeSyms* syms)
+    : RapEvaluator(arena, arena, intern, syms) {}
 
   // Initialize the ChangeSet in the client region.
   // Must be called before runN() when using Stage 2 ChangeSet machinery.

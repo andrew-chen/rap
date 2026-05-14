@@ -47,6 +47,12 @@ struct RapLoop {
     alignas(64) std::uint8_t eval_buf[EVAL_ARENA_SIZE];
     Arena       eval_arena;
 
+    // Permanent evaluator arena: holds the RapEvaluator's client region and
+    // interned "no-ops"/"cons-ops"/"empty-ops" SymEntries.  These must survive
+    // across eval_arena resets, so they live in a separate never-reset buffer.
+    alignas(64) std::uint8_t rap_buf[MAX_CHANGESET_ARENA + 1024];
+    Arena       rap_arena;
+
     // Queues.
     Agenda      agenda;
     SpineArena  spine;
@@ -63,6 +69,7 @@ struct RapLoop {
     RapLoop()
         : intern_arena(intern_buf, sizeof(intern_buf))
         , eval_arena(eval_buf, sizeof(eval_buf))
+        , rap_arena(rap_buf, sizeof(rap_buf))
     {}
 
     // Initialize. Must be called before any other method.
@@ -77,8 +84,11 @@ struct RapLoop {
         if (!syms.s_true || !syms.s_false ||
             !syms.s_insufficient || !syms.s_bounded) return false;
 
-        // Construct RapEvaluator in-place using the eval_arena.
-        evaluator = new (evaluator_buf) RapEvaluator(&eval_arena, &intern, &syms);
+        // Construct RapEvaluator: eval_arena is the working arena (reset between
+        // queries); rap_arena is the permanent arena (never reset) that holds
+        // the interned "no-ops"/"cons-ops" SymEntries and the 16 KiB client-
+        // region buffer so they survive eval_arena.reset() calls in run_one().
+        evaluator = new (evaluator_buf) RapEvaluator(&eval_arena, &rap_arena, &intern, &syms);
         return evaluator != nullptr;
     }
 
