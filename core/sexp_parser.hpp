@@ -451,6 +451,19 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv,
     return make_eq(a, u, v);
   }
 
+  // ---- =/= ----
+  if (sym_lit_eq(op, "=/=")) {
+    if (!c || !c->cdr || c->cdr->cdr) {
+      std::printf("[compile_goal] ERROR: '=/=' requires exactly 2 args: ");
+      print_sexp(x);
+      std::printf("\n");
+      return nullptr;
+    }
+    Term u = compile_term(a, genv, benv, c->car);
+    Term v = compile_term(a, genv, benv, c->cdr->car);
+    return make_diseq(a, u, v);
+  }
+
   // ---- fresh ----
   if (sym_lit_eq(op, "fresh")) {
     if (!c || !c->car || c->car->tag != SexpTag::List) {
@@ -933,6 +946,14 @@ inline void print_goal(const Goal* g, int indent = 0) {
         std::printf(" ");
         print_term(g->call.args[i]);
       }
+      std::printf(")");
+      break;
+
+    case GoalTag::Diseq:
+      std::printf("(=/= ");
+      print_term(g->diseq.u);
+      std::printf(" ");
+      print_term(g->diseq.v);
       std::printf(")");
       break;
 

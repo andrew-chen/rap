@@ -50,6 +50,11 @@ int main() {
         "(defrel (weak-check-qido item H T qid)"
         "  (== item (q qid (check H T))))"
 
+        "(defrel (not-weak-check-qido item H T)"
+        "  (fresh (tag id chk)"
+        "    (== item (tag id chk))"
+        "    (=/= chk (check H T))))"
+
         "(defrel (collect-weak-qidso agenda H T qids)"
         "  (disj"
         "    (conj (== agenda ()) (== qids ()))"
@@ -61,7 +66,9 @@ int main() {
         "            (call weak-check-qido item H T qid)"
         "            (call collect-weak-qidso rest H T tail)"
         "            (== qids (qid . tail)))"
-        "          (call collect-weak-qidso rest H T qids))))))"
+        "          (conj"
+        "            (call not-weak-check-qido item H T)"
+        "            (call collect-weak-qidso rest H T qids)))))))"
 
         "(defrel (qids->remove-opso qids ops)"
         "  (disj"

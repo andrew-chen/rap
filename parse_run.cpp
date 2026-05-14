@@ -64,9 +64,17 @@ int main() {
     "(defrel (is-bar x) (== x bar))"
     "(run 1 (q) (call is-bar q))";
 
+  // Program 13: Disequality constraint — foo excluded, bar and baz produced
+  const char* program13 =
+    "(run 5 (q)"
+    "  (conj"
+    "    (=/= q foo)"
+    "    (disj (== q foo) (== q bar) (== q baz))))";
+
   const char* programs[] = {
     program1, program2, program3, program4, program5, program6,
-    program7, program8, program9, program10, program11, program12
+    program7, program8, program9, program10, program11, program12,
+    program13
   };
 
   for (const char* src : programs) {

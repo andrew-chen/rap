@@ -47,9 +47,11 @@ static_assert(std::is_trivially_destructible_v<PairNode>);
 
 
 // ---- Goals ----
-enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe, Call };
+enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe, Call, Diseq };
 
 struct GoalEq    { Term u; Term v; };
+struct GoalDiseq { Term u; Term v; };
+static_assert(std::is_trivially_destructible_v<GoalDiseq>);
 struct GoalBin   { const struct Goal* g1; const struct Goal* g2; };
 struct GoalFresh { std::uint32_t n; const Goal* body; };
 
@@ -77,6 +79,7 @@ struct Goal {
     GoalFresh fresh;
     GoalProbe probe;
     GoalCall  call;   // Stage 0A
+    GoalDiseq diseq;  // Diseq (=/=)
   };
 };
 static_assert(std::is_trivially_destructible_v<Goal>);
@@ -358,6 +361,7 @@ inline Outcome ground_check_goal(Arena& a, const Goal* g0, const State& st, cons
         return Outcome::Insufficient;
 
       case GoalTag::Call:
+      case GoalTag::Diseq:
         return Outcome::Insufficient;
 
       default:
@@ -481,6 +485,14 @@ inline const Goal* make_eq(Arena& a, Term u, Term v) {
   return g;
 }
 
+inline const Goal* make_diseq(Arena& a, Term u, Term v) {
+  Goal* g = a.make<Goal>();
+  if (!g) return nullptr;
+  g->tag   = GoalTag::Diseq;
+  g->diseq = GoalDiseq{u, v};
+  return g;
+}
+
 inline const Goal* make_disj(Arena& a, const Goal* g1, const Goal* g2) {
   Goal* g = a.make<Goal>();
   if (!g) return nullptr;
@@ -573,34 +585,24 @@ struct Work {
 };
 static_assert(std::is_trivially_destructible_v<Work>);
 
-// WorkQueue: LIFO (depth-first) stack.
-//
-// DFS is required for the Stage 2 case study: collect-weak-qidso's inner
-// disj has a "collect item" branch and a "skip item" branch. With BFS (FIFO)
-// the skip branch always completes faster (fewer steps), so the all-skip
-// solution (weak-qids = ()) is found first. With DFS (LIFO) the "collect"
-// branch is pursued depth-first, building up the complete set (10 12) before
-// any skip path can complete.
-//
-// Answer ordering (g1 before g2 for disj): GoalTag::Disj pushes g2 first
-// (deeper in the stack), then g1 (top of stack), so g1 is popped and
-// explored first — identical to the FIFO first-answer order.
-//
-// Termination: all recursive relations in the test suite are right-recursive
-// (appendo, membero, collect-weak-qidso) or bounded-depth (even/odd for n≤3).
-// Left-recursive relations with DFS would loop; none are present here.
+// WorkQueue: FIFO (breadth-first) queue.
+// push appends to the back (tail); pop takes from the front (head).
+// Standard miniKanren BFS interleaving strategy: ensures completeness.
 struct WorkQueue {
-  Work* head = nullptr;
+  Work* head = nullptr;  // front — pop from here
+  Work* tail = nullptr;  // back  — push to here
 
   void push(Work* w) {
-    w->next = head;
-    head    = w;
+    w->next = nullptr;
+    if (tail) tail->next = w; else head = w;
+    tail = w;
   }
 
   Work* pop() {
     Work* w = head;
     if (!w) return nullptr;
-    head    = w->next;
+    head = w->next;
+    if (!head) tail = nullptr;
     w->next = nullptr;
     return w;
   }
@@ -631,6 +633,25 @@ inline StepResult apply_k_or_yield(Arena& a, WorkQueue& q, State st,
   return StepResult::NoYield;
 }
 
+
+// ============================================================================
+// check_diseqs: verify no active disequality constraint is violated by s.
+// A constraint (u ≠ v) is violated iff unify(u, v, s) succeeds without adding
+// new bindings (u and v are already equal under s).
+// Returns true if all constraints hold; false if any is violated.
+// ============================================================================
+inline bool check_diseqs(Arena& a, const Diseq* diseqs,
+                          const Binding* s, const RelEnv& rel_env) {
+  for (const Diseq* d = diseqs; d; d = d->next) {
+    const Binding* s2 = s;
+    bool ok = unify(a, d->u, d->v, nullptr, s2, rel_env);
+    if (ok && s2 == s) {
+      // Unification succeeded with no new bindings — u and v already equal.
+      return false;
+    }
+  }
+  return true;
+}
 
 // ============================================================================
 // Evaluator: base class for the µKanren engine (Stage 0B)
@@ -767,22 +788,22 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
     case GoalTag::Eq: {
       const Binding* s = st.subst;
       if (!unify(a, g->eq.u, g->eq.v, st.env, s, rel_env)) return StepResult::NoYield;
+      if (!check_diseqs(a, st.diseqs, s, rel_env)) return StepResult::NoYield;
       State st2{ s, st.diseqs, st.env, st.counter, st.client_offset };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
     case GoalTag::Disj: {
-      // With LIFO (DFS) WorkQueue, the last-pushed item is explored first.
-      // Push g2 first (goes deeper in stack), then g1 (goes to top → explored first).
-      // This preserves g1-before-g2 answer ordering under DFS.
+      // BFS (FIFO): push g1 first so it is dequeued before g2.
       Work* w2 = a.make<Work>();
       if (!w2) return StepResult::OOM;
       w2->g = g->bin.g2; w2->st = st; w2->k = k;
-      q.push(w2);
 
       Work* w1 = w;
       w1->g = g->bin.g1; w1->st = st; w1->k = k;
+
       q.push(w1);
+      q.push(w2);
       return StepResult::NoYield;
     }
 
@@ -969,6 +990,39 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       w->k  = wrapped_k;
       q.push(w);
       return StepResult::NoYield;
+    }
+
+    case GoalTag::Diseq: {
+      // Deep-resolve BVars throughout both sides (handles compound terms like
+      // (check H T) where H and T are inner BVars), then shallow-walk Vars.
+      Term u = deep_resolve_bvar(a, g->diseq.u, st.env);
+      Term v = deep_resolve_bvar(a, g->diseq.v, st.env);
+      u = walk(u, st.subst, rel_env);
+      v = walk(v, st.subst, rel_env);
+
+      // Attempt unification to determine the constraint's status.
+      const Binding* s2 = st.subst;
+      bool ok = unify(a, u, v, nullptr, s2, rel_env);
+
+      if (!ok) {
+        // u and v can never be equal — constraint trivially satisfied.
+        return apply_k_or_yield(a, q, st, k, w, yielded);
+      }
+
+      if (s2 == st.subst) {
+        // No new bindings needed: u and v already equal — violated immediately.
+        return StepResult::NoYield;
+      }
+
+      // Constraint not yet violated; record it for future equality checks.
+      Diseq* d = a.make<Diseq>();
+      if (!d) return StepResult::OOM;
+      d->u    = u;
+      d->v    = v;
+      d->next = st.diseqs;
+
+      State st2{ st.subst, d, st.env, st.counter, st.client_offset };
+      return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
     default:
