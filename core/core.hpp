@@ -386,6 +386,23 @@ inline Term deep_resolve_bvar(Arena& a, Term t, const EnvFrame* env) {
   return Term::make_pair(p);
 }
 
+// ============================================================================
+// walk_deep: recursively walk t through substitution s, allocating new
+// PairNodes in arena for any Pair whose children are walked.
+// Assumes BVars have already been resolved (via deep_resolve_bvar) so only
+// Var → substitution lookup is needed here.
+// Used to fully ground compound Call arguments before dispatch.
+// ============================================================================
+inline Term walk_deep(Arena& a, Term t, const Binding* s, const RelEnv& rel_env) {
+  t = walk(t, s, rel_env);
+  if (t.tag != TermTag::Pair || !t.pair) return t;
+  PairNode* p = a.make<PairNode>();
+  if (!p) return t;  // OOM — return partially-walked term; unify fails downstream
+  p->car = walk_deep(a, t.pair->car, s, rel_env);
+  p->cdr = walk_deep(a, t.pair->cdr, s, rel_env);
+  return Term::make_pair(p);
+}
+
 // ---- Iterative unify (no recursion) ----
 struct UnifyJob { Term u; Term v; UnifyJob* next; };
 static_assert(std::is_trivially_destructible_v<UnifyJob>);
@@ -508,12 +525,19 @@ inline const Goal* make_call(Arena& a, Term rel_term, const Term* args,
 
 
 // ---- Fair evaluator: explicit continuation + FIFO work queue ----
-enum class KontTag : std::uint8_t { Done, Then };
-struct KontThen { const Goal* g2; const struct Kont* next; };
+//
+// KontTag::RestoreEnv is used by GoalTag::Call to restore the CALLER's env
+// when transitioning from the callee back into the caller's continuation.
+// Without this, the callee's env would persist into the caller's continuation
+// goals, causing BVar indices compiled in the caller's scope to resolve against
+// the callee's env chain (wrong variables).
+enum class KontTag : std::uint8_t { Done, Then, RestoreEnv };
+struct KontThen       { const Goal*       g2;  const struct Kont* next; };
+struct KontRestoreEnv { const EnvFrame*   env; const struct Kont* next; };
 
 struct Kont {
   KontTag tag;
-  union { KontThen then_; };
+  union { KontThen then_; KontRestoreEnv restore_env_; };
 };
 static_assert(std::is_trivially_destructible_v<Kont>);
 
@@ -532,6 +556,15 @@ inline const Kont* kont_then(Arena& a, const Goal* g2, const Kont* next) {
   return k;
 }
 
+inline const Kont* kont_restore_env(Arena& a, const EnvFrame* env,
+                                    const Kont* next) {
+  Kont* k = a.make<Kont>();
+  if (!k) return nullptr;
+  k->tag          = KontTag::RestoreEnv;
+  k->restore_env_ = KontRestoreEnv{env, next};
+  return k;
+}
+
 struct Work {
   const Goal* g;
   State       st;
@@ -540,21 +573,34 @@ struct Work {
 };
 static_assert(std::is_trivially_destructible_v<Work>);
 
+// WorkQueue: LIFO (depth-first) stack.
+//
+// DFS is required for the Stage 2 case study: collect-weak-qidso's inner
+// disj has a "collect item" branch and a "skip item" branch. With BFS (FIFO)
+// the skip branch always completes faster (fewer steps), so the all-skip
+// solution (weak-qids = ()) is found first. With DFS (LIFO) the "collect"
+// branch is pursued depth-first, building up the complete set (10 12) before
+// any skip path can complete.
+//
+// Answer ordering (g1 before g2 for disj): GoalTag::Disj pushes g2 first
+// (deeper in the stack), then g1 (top of stack), so g1 is popped and
+// explored first — identical to the FIFO first-answer order.
+//
+// Termination: all recursive relations in the test suite are right-recursive
+// (appendo, membero, collect-weak-qidso) or bounded-depth (even/odd for n≤3).
+// Left-recursive relations with DFS would loop; none are present here.
 struct WorkQueue {
   Work* head = nullptr;
-  Work* tail = nullptr;
 
   void push(Work* w) {
-    w->next = nullptr;
-    if (!tail) head = tail = w;
-    else { tail->next = w; tail = w; }
+    w->next = head;
+    head    = w;
   }
 
   Work* pop() {
     Work* w = head;
     if (!w) return nullptr;
-    head = w->next;
-    if (!head) tail = nullptr;
+    head    = w->next;
     w->next = nullptr;
     return w;
   }
@@ -562,6 +608,13 @@ struct WorkQueue {
 
 inline StepResult apply_k_or_yield(Arena& a, WorkQueue& q, State st,
                                    const Kont* k, Work* reuse, State& yielded) {
+  // RestoreEnv: adjust st.env to the saved caller env before continuing.
+  // This is set by GoalTag::Call to ensure the caller's continuation goals
+  // see BVar indices resolved against the caller's scope, not the callee's.
+  while (k && k->tag == KontTag::RestoreEnv) {
+    st.env = k->restore_env_.env;
+    k = k->restore_env_.next;
+  }
   if (k && k->tag == KontTag::Then) {
     Work* w = reuse ? reuse : a.make<Work>();
     if (!w) return StepResult::OOM;
@@ -719,14 +772,17 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
     }
 
     case GoalTag::Disj: {
-      Work* w1 = w;
-      w1->g = g->bin.g1; w1->st = st; w1->k = k;
-      q.push(w1);
-
+      // With LIFO (DFS) WorkQueue, the last-pushed item is explored first.
+      // Push g2 first (goes deeper in stack), then g1 (goes to top → explored first).
+      // This preserves g1-before-g2 answer ordering under DFS.
       Work* w2 = a.make<Work>();
       if (!w2) return StepResult::OOM;
       w2->g = g->bin.g2; w2->st = st; w2->k = k;
       q.push(w2);
+
+      Work* w1 = w;
+      w1->g = g->bin.g1; w1->st = st; w1->k = k;
+      q.push(w1);
       return StepResult::NoYield;
     }
 
@@ -845,8 +901,18 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
             rel = found.rel;
           } else {
             // Not in RelEnv: virtual extension point (Stage 0B).
+            // Deep-resolve BVars → Vars, then walk Vars through the
+            // substitution, so handleUnknownRelation receives fully-grounded
+            // terms (no compile-time BVar indices survive into the handler).
+            Term* resolved = static_cast<Term*>(
+                a.alloc(g->call.arg_count * sizeof(Term), alignof(Term)));
+            if (!resolved) return StepResult::OOM;
+            for (std::uint32_t ri = 0; ri < g->call.arg_count; ++ri) {
+              Term t = deep_resolve_bvar(a, g->call.args[ri], st.env);
+              resolved[ri] = walk_deep(a, t, st.subst, rel_env);
+            }
             StepResult sr = handleUnknownRelation(
-                rel_t.sym, g->call.args, g->call.arg_count, st);
+                rel_t.sym, resolved, g->call.arg_count, st);
             if (sr == StepResult::NoYield) return StepResult::NoYield;
             // Relation succeeded; commit any client region allocations.
             st.client_offset = client_region_.offset;
@@ -876,9 +942,13 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       }
 
       // Unify fresh vars with caller's arguments.
+      // deep_resolve_bvar replaces BVar(k) → Var(env[k]) throughout the full
+      // term tree (not just the top level), so compound args like
+      // (q strong-qid (check+ H T R)) have all inner BVars converted to
+      // runtime Vars before we pass them to unify (which uses env=nullptr).
       const Binding* s = st.subst;
       for (std::uint32_t i = 0; i < rel->param_count; ++i) {
-        Term arg   = resolve_bvar(g->call.args[i], st.env);
+        Term arg   = deep_resolve_bvar(a, g->call.args[i], st.env);
         arg        = walk(arg, s, rel_env);
         Term param = Term::var(base + i);
         if (!unify(a, param, arg, nullptr, s, rel_env))
@@ -886,10 +956,17 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       }
 
       // Continue with body under fresh closed env.
+      // Wrap k with RestoreEnv so that when the callee's body finishes and
+      // apply_k_or_yield fires the caller's continuation, st.env is restored
+      // to the caller's scope. Without this, the callee's body_env would
+      // persist into the continuation, causing BVar indices compiled in the
+      // caller's scope to resolve against the wrong env chain.
+      const Kont* wrapped_k = kont_restore_env(a, st.env, k);
+      if (!wrapped_k) return StepResult::OOM;
       State st2{ s, st.diseqs, body_env, st.counter, st.client_offset };
       w->g  = rel->body;
       w->st = st2;
-      w->k  = k;
+      w->k  = wrapped_k;
       q.push(w);
       return StepResult::NoYield;
     }

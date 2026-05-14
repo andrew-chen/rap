@@ -63,9 +63,13 @@ int main() {
     a.reset();
   }
 
-  // ---- Test 3: cons-ops with 3 args succeeds ----
+  // ---- Test 3: cons-ops with valid output op succeeds ----
+  // Stage 2: cons-ops now validates Op structure. Pass a real (output ...) op.
   {
-    ParsedQuery pq = parse_query(a, "(run 1 (q) (call cons-ops a b q))");
+    ParsedQuery pq = parse_query(a,
+        "(run 1 (q) (fresh (ops0)"
+        "  (call no-ops ops0)"
+        "  (call cons-ops (output some-result) ops0 q)))");
     if (!pq.goal) {
       std::printf("FAIL: parse cons-ops query\n");
       return 1;
@@ -83,7 +87,7 @@ int main() {
 
   // ---- Test 4: cons-ops with wrong arg count fails ----
   {
-    ParsedQuery pq = parse_query(a, "(run 1 (q) (call cons-ops a))");
+    ParsedQuery pq = parse_query(a, "(run 1 (q) (call cons-ops (output x)))");
     if (!pq.goal) {
       std::printf("FAIL: parse cons-ops/1 query\n");
       return 1;
