@@ -37,6 +37,17 @@ parse_run
 /.claude
 test_rap
 
+# Compiled binaries (root level)
+/parse_run
+/bench_parse_run
+/core_test_extension
+/rap_test_extension
+/test_rap
+/test_stage2
+
+# Output files
+*.txt
+
 # Output and artifact files
 *.txt
 *.out
