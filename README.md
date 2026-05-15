@@ -1,249 +1,297 @@
 # RAP — Relational Agenda Programming
 
-## What This Is
+A C++20 logic programming engine designed for embedding in systems software.
+Zero dependencies. Header-only. Callable via FFI from any language.
 
-RAP is a C++20 logic programming engine designed for embedding in larger systems.
-It implements **Relational Agenda Programming**: an execution model in which
-pending queries are first-class terms, query results atomically modify a work
-agenda via a ChangeSet mechanism, and reasoning, control flow, and I/O all flow
-through the same uniform relational machinery with no privileged escape hatches.
-
-The system has two layers:
-
-- **`core/`** — a self-contained µKanren engine extended with `Probe`, a novel
-  four-valued bounded meta-evaluation primitive. This layer is complete.
-- **`rap/`** — the agenda layer: work queue (Queue 2), ChangeSet construction
-  and interpretation, the reactive execution loop, and the embedding API.
-  This layer is partially scaffolded; the work queue is not yet implemented.
-
-A third application layer (`security/`) is planned for a companion workshop
-paper on embedded security policy verification. It will depend only on `core/`,
-not on `rap/`.
+> **Papers:** This codebase supports two papers currently under review:
+> - "Relational Agenda Programming: A Uniform Execution Model for
+>   Embedded Reasoning Systems"
+> - "Lightweight Runtime Security Policy Verification Using an Embeddable C++ miniKanren"
+>
+> Venue information will be added upon acceptance.
 
 ---
 
-## Layer Structure
+## What This Is
+
+RAP is built on [miniKanren](http://minikanren.org) — specifically a C++20
+implementation of the µKanren core extended with anonymous relations (`rel`,
+`call`, `defrel`), disequality constraints (`=/=`), and a novel bounded
+meta-evaluation primitive (`Probe`). If you know miniKanren, the surface
+syntax and semantics will be immediately familiar.
+
+The contribution beyond the engine itself is the **execution model**: most embedded reasoning systems draw a hard line between the reasoning layer
+and the control layer. RAP eliminates that line.
+
+The key idea: the pending-query agenda is a **first-class relational term**.
+Queries receive the current agenda as input, reason over it using the same
+unification machinery used for domain reasoning, and return a **ChangeSet**
+specifying atomic agenda modifications. Reasoning, control flow, and I/O all
+flow through the same uniform machinery — no privileged escape hatches.
+
+Two properties follow from this design:
+
+- **ChangeSet validity by construction.** ChangeSets are built using two
+  relations — `no-ops` and `cons-ops` — where `cons-ops` fails on invalid
+  operations. Any successfully constructed ChangeSet is valid. No runtime
+  validation step is needed.
+
+- **Reflective agenda reasoning.** A query can inspect pending work, detect
+  redundancy via unification, and emit a ChangeSet pruning it. This is not
+  an API feature — it falls out of the agenda being a term.
+
+---
+
+## Quick Start
+
+```bash
+git clone https://github.com/andrew-chen/rap
+cd rap
+make
+./parse_run      # runs 13 example programs
+make test        # runs full test suite
+```
+
+Requires a C++20 compiler (`clang++` or `g++`). No other dependencies.
+
+---
+
+## A Taste of the Language
+
+The surface syntax is s-expressions. Here is `appendo` running forward and
+backward in the same program:
+
+```scheme
+; forward: (1 2) ++ (3 4) = ?
+(run 1 (q) (call appendo (1 2) (3 4) q))
+; => ((1 2 3 4))
+
+; backward: ? ++ (3 4) = (1 2 3 4)
+(run 1 (q) (call appendo q (3 4) (1 2 3 4)))
+; => ((1 2))
+```
+
+Mutual recursion via first-class anonymous relations:
+
+```scheme
+(run 5 (q)
+  (fresh (eveno oddo)
+    (== eveno (rel (n) (disj (== n 0)
+                             (fresh (m) (conj (== n (s m))
+                                             (call oddo m))))))
+    (== oddo  (rel (n) (fresh (m) (conj (== n (s m))
+                                        (call eveno m)))))
+    (call eveno q)))
+; => (0 (s s 0) (s s s s 0) ...)
+```
+
+Bounded meta-evaluation with `Probe` — the engine's novel primitive:
+
+```scheme
+; succeeds if the sub-goal finitely fails within 100 steps
+(probe (call some-goal x) false 100 true false)
+```
+
+Disequality constraints:
+
+```scheme
+(run 3 (q)
+  (fresh (x)
+    (=/= x foo)
+    (disj (== x foo) (== x bar) (== x baz))))
+; => (baz bar)   ; foo excluded by constraint
+```
+
+Reflective agenda reasoning — a query that prunes redundant pending work:
+
+```scheme
+(defrel (strengthen-agendao agenda ops)
+  (fresh (H T R strong-qid weak-qids ops0)
+    (membero (q strong-qid (check+ H T R)) agenda)
+    (collect-weak-qidso agenda H T weak-qids)
+    (qids->remove-opso weak-qids ops0)
+    (cons-ops (output (pruned H T)) ops0 ops)))
+```
+
+Given an agenda containing both `(check H T)` and `(check+ H T R)` entries,
+this relation finds the strong check, collects all superseded weak checks via
+unification, and emits a ChangeSet removing them. It runs correctly under any
+search strategy because the branches are made mutually exclusive using `=/=`.
+
+---
+
+## Architecture
 
 ```
 rap/
-├── core/                    # Complete: µKanren + Probe engine
-│   ├── arena.hpp            # Bump allocator (injected buffer, POD-only)
-│   ├── intern.hpp           # FNV-1a symbol interning (pointer-identity eq.)
-│   ├── core.hpp             # Logic kernel: terms, goals, unify, evaluator
-│   └── sexp_parser.hpp      # Tokenizer, s-expr parser, goal compiler, printer
+├── core/                   # Self-contained µKanren engine
+│   ├── mktypes.hpp         # Forward declarations (breaks circular deps)
+│   ├── arena.hpp           # Bump allocator (caller-supplied buffer, POD-only)
+│   ├── intern.hpp          # FNV-1a symbol interning, pointer-identity eq.
+│   ├── core.hpp            # Terms, goals, unifier, Evaluator class, Probe
+│   └── sexp_parser.hpp     # S-expr tokenizer, goal compiler, printer
 │
-├── rap/                     # Partial: agenda layer (work queue not yet implemented)
-│   ├── rap.hpp              # RapEngine: thin wrapper over core evaluator
-│   ├── work_queue.hpp       # Placeholder — see "What Needs to Happen" below
-│   └── test_rap.cpp         # Smoke test: RapEngine instantiation + query
+├── rap/                    # Agenda layer
+│   ├── changeset.hpp       # Op, ChangeSet, deep_copy_term
+│   ├── agenda.hpp          # Queue 2: ring-buffer, pointer-rewriting compaction
+│   ├── spine.hpp           # Short-lived Pair nodes for agenda list term
+│   ├── loop.hpp            # Reactive execution loop (RapLoop)
+│   ├── rap.hpp             # RapEvaluator: no-ops, cons-ops, ClientRegion
+│   ├── test_rap.cpp        # Extension mechanism tests
+│   └── test_stage2.cpp     # strengthen-agendao validation
 │
-├── security/                # Planned: workshop paper application layer
-│                            # Depends on core/ only, not on rap/
+├── security/               # Embedded security policy case studies
+│   └── security_test.cpp   # RBAC + network policy, 10/10 correct
 │
-├── parse_run.cpp            # Driver: 6 example programs (not part of any layer)
-└── Makefile                 # Builds parse_run and test_rap
+├── parse_run.cpp           # 13 example programs including mutual recursion
+└── Makefile
 ```
+
+**`core/`** is completely self-contained. It can be used independently of
+the RAP layer — the security case studies depend only on `core/`.
+
+**`rap/`** builds on `core/` via a single virtual extension point
+(`handleUnknownRelation`). The `Evaluator` base class owns evaluation;
+`RapEvaluator` overrides the extension point to handle ChangeSet construction.
+Client state (the ChangeSet being accumulated) lives in a `ClientRegion` whose
+bump pointer is saved and restored with `State` on backtrack — making
+ChangeSet construction automatically backtrack-safe.
 
 ---
 
-## The Execution Model (RAP)
+## Key Implementation Properties
 
-The RAP layer implements a single-threaded reactive loop over two queues and
-one output channel:
+**No dynamic allocation.** All data lives in caller-supplied arenas.
+`arena.reset()` reclaims everything. The system maintains several arenas
+with different lifetimes: core (per-query), intern (long-lived), Queue 2
+(ring-buffer with pointer-rewriting compaction), ChangeSet, and spine
+(short-lived Pair nodes for the agenda list term).
 
-1. Consult **Queue 2** (the agenda) to select the next query term
-2. Remove the selected query from the agenda
-3. Execute the query via **Queue 1** (the internal VM queue) to completion
-4. The query produces a result: answers, a **ChangeSet** term, and output terms
-5. Interpret the ChangeSet — apply agenda modifications atomically
-6. Append output terms to the **output queue** (write-only)
-7. Return to step 1
+**All POD types.** Every struct is trivially destructible. This enables the
+arena strategy — no destructors to run, no ownership tracking needed.
 
-**Queue 1 (VM queue):** Internal to query execution. Manages goal resolution
-iteratively. Prevents stack overflow. Enables bounded execution and the
-`Probe` Unknown outcome. Not directly accessible to the embedder.
+**Fully iterative.** Unification and search use explicit job stacks. No
+recursion in the engine, no stack overflow risk. (Exception:
+`deep_copy_term` recurses over term structure; term depth is bounded in
+practice and an iterative version is future work.)
 
-**Queue 2 (Agenda):** The pending query list. A **term** in the same relational
-space as all other data. Passed as input to queries. Queries can reason over it
-using unification — the same machinery used for domain reasoning. Modified only
-between query executions, never during one.
+**BFS interleaving.** The VM queue uses FIFO ordering, giving standard
+miniKanren breadth-first interleaving. A depth-first variant is
+straightforward to configure (swap push order in the `Disj` case).
 
-**ChangeSet:** The portion of a query result specifying agenda modifications.
-A term constructed using two foundational relations:
+**De Bruijn indices.** `fresh` variables compile to `BVar(k)` indices —
+no alpha-renaming, no variable capture, evaluator stays purely structural.
 
-```prolog
-valid-ops(no-ops).
-valid-ops(cons-ops(Op, Rest)) :- valid-op(Op), valid-ops(Rest).
-```
-
-Where `valid-op` covers: `add(Query)`, `remove(QueryId)`, `output(Term)`.
-Because `cons-ops` fails if given an invalid operation, any successfully
-constructed ChangeSet is **valid by construction** — no runtime validation
-step is needed.
-
-**Output queue:** Write-only from the query's perspective. Queries specify
-output terms in their ChangeSet; the runtime appends them. There is no feedback
-loop from output back into the reasoning layer unless the embedder explicitly
-constructs an input query from output data.
+**Disequality constraints.** `=/=` records constraints in `State.diseqs`
+and checks them after every unification. The `not-weak-check-qido` guard
+in the reflective agenda case study depends on this.
 
 ---
 
-## The Core Engine (`core/`)
+## Performance
 
-### Key Properties
+Measured on Apple M2 Pro, macOS 14.8.3, Apple clang 16.0.0, `-O2`.
+100 iterations after 10 warmup runs.
 
-- **No dynamic allocation** — all data lives in a caller-supplied fixed-size
-  arena. `arena.reset()` reclaims everything.
-- **All POD types** — every struct is trivially destructible.
-- **Fully iterative** — unification and search use explicit job stacks; no
-  recursion, no stack overflow risk.
-- **Fair search** — FIFO work queue gives breadth-first interleaving of
-  disjunctive branches.
+| Workload | Median latency |
+|---|---|
+| Network policy query (structural unification) | 3.6 µs |
+| ACL query (two-step relational join) | 17 µs |
+| `strengthen-agendao` via `run_one()` | 10.7 µs |
+| `appendo` forward | 1.54 µs |
+| `appendo` backward | 2.12 µs |
 
-### Terms
-
-`Var` (logic variable), `BVar` (de Bruijn bound variable), `Int`, `Sym`
-(interned), `Nil`, `Pair`
-
-### Goals
-
-`Eq` (unify), `Conj`, `Disj`, `Fresh` (lexical binder), `Probe`
-(bounded meta-evaluation — see below)
-
-### Surface Syntax (s-expressions)
-
-```
-(run N (q) GOAL)
-(== u v)
-(conj g1 g2 ...)
-(disj g1 g2 ...)
-(fresh (x y ...) GOAL)
-(probe GOAL condition max_iter sandbox req_ground)
-```
-
-### The `Probe` Primitive
-
-`Probe` is a novel contribution of this engine. It runs a sub-goal under a
-bounded iteration limit and returns one of **four outcomes**:
-
-| Outcome       | Meaning                                              |
-|---------------|------------------------------------------------------|
-| `true`        | Sub-goal succeeded                                   |
-| `false`       | Sub-goal failed (finite failure)                     |
-| `insufficient`| Sub-goal could not be determined — unground variables|
-| `bounded`     | Iteration limit hit before determination             |
-
-Two control flags govern behaviour:
-
-- **`sandbox`** — when true, bindings from sub-evaluation do not propagate
-  outward. Enables meta-evaluation without side effects on the outer state.
-- **`req_ground`** — when true, unground variables short-circuit to
-  `insufficient` before execution begins.
-
-`Probe` is the foundation for operationally controlled negation in the RAP
-layer: negated subgoals are evaluated under explicit budgets, and
-`bounded` maps to the paper's "Unknown" outcome — a runtime signal distinct
-from both logical success and logical failure.
+Latency scales with query complexity, not with embedding overhead.
+Simple structural queries are sub-2 µs.
 
 ---
 
-## Build
+## Test Suite
 
 ```bash
-make          # builds parse_run (6 example programs) and test_rap (smoke test)
-make run      # runs parse_run
-make clean
+make test
 ```
 
-All targets build clean under `clang++` (or `$CXX`) with
-`-std=c++20 -O2 -Wall -Wextra -pedantic -Werror`.
+Runs five test binaries:
+
+| Binary | What it tests |
+|---|---|
+| `parse_run` | 13 programs: core relational behavior, anonymous relations, mutual recursion, disequality |
+| `security/security_test` | RBAC + network policy, 10/10 correct classifications |
+| `test_rap` | Extension mechanism, RapEvaluator construction |
+| `core_test_extension` | Base Evaluator backtracking, ClientRegion save/restore |
+| `rap_test_extension` | RapEvaluator backtrack rewind, no-ops/cons-ops arity |
+| `test_stage2` | `strengthen-agendao` full case study: Remove(10), Remove(12), Output((pruned hypA test1)) |
 
 ---
 
-## Current Status
+## The Probe Primitive
 
-| Layer      | Status                                              |
-|------------|-----------------------------------------------------|
-| `core/`    | Complete. All features implemented and tested.      |
-| `rap/`     | Scaffolded. `RapEngine` wraps core; smoke test passes. Work queue not implemented. |
-| `security/`  | Complete for paper. Both case studies working (ACL + network policy). 10/10 test cases correct. Needs Makefile target. |
+`Probe` is this engine's main extension to standard miniKanren.
 
----
+```scheme
+(probe Goal Condition Budget Sandbox ReqGround)
+```
 
-## What Needs to Happen Next
+| Argument | Meaning |
+|---|---|
+| `Goal` | Subgoal to evaluate |
+| `Condition` | Expected outcome: `true`, `false`, `insufficient`, or `bounded` |
+| `Budget` | Maximum iteration count |
+| `Sandbox` | If true, bindings do not propagate outward |
+| `ReqGround` | If true, unground variables short-circuit to `insufficient` |
 
-### 1. Implement `rap/work_queue.hpp`
+`Probe` succeeds when the actual outcome matches `Condition`.
 
-This is the immediate priority. The work queue (Queue 2 / agenda) needs to
-support at minimum:
-
-- Enqueue a query term
-- Dequeue the next query term for execution
-- Apply a ChangeSet — add queries, remove pending queries by stable ID
-- Expose the current queue contents as a term (for reflective agenda reasoning)
-- Accept output terms and append them to a write-only output queue
-
-This is **not** a multi-agent or distributed scheduler. It is a single-engine,
-single-threaded pending-query list whose contents are a relational term.
-
-### 2. Implement the reactive execution loop in `rap/rap.hpp`
-
-The loop described in "The Execution Model" section above. Drives queries from
-Queue 2 through the core evaluator, applies ChangeSets, routes outputs.
-
-### 3. Implement ChangeSet construction relations
-
-`no-ops` and `cons-ops` as relational primitives. The inductive validity
-theorem (any constructible ChangeSet is valid) should be verified against
-the implementation.
-
-### 4. Validate case studies
-
-Two case studies are designed for the paper:
-
-- **Configuration validation** — demonstrates `Probe`-based negation with
-  explicit Unknown outcome
-- **Reflective agenda reasoning** — demonstrates a query reasoning over the
-  agenda term, finding redundant pending work via unification, and emitting
-  a ChangeSet that prunes it
-
-Both are specified in detail in the paper design. Once the RAP layer is
-implemented, these need to run correctly against the working code.
-
-### 5. Scaffold `security/`
-
-After `core/` is confirmed stable (it is), the workshop paper application
-layer can be started. This depends only on `core/`, not on `rap/`.
+The four outcomes distinguish things standard miniKanren collapses:
+`false` is finite failure (proved); `bounded` means the budget was exhausted
+(not proved either way); `insufficient` means the query was indeterminate
+due to unground variables. This distinction matters for embedded systems
+where "ran out of budget" and "logically false" require different responses.
 
 ---
 
-## Paper Context
+## Embedding
 
-This codebase supports two papers:
+```cpp
+#include "core/sexp_parser.hpp"
 
-**RAP paper** — "Relational Agenda Programming: A Uniform Execution Model for
-Embedded Reasoning Systems" — target: Onward! Papers at SPLASH 2026,
-submission deadline May 15, 2026. Requires full RAP layer implementation.
+// One-time setup
+alignas(64) unsigned char mem[1 << 20];
+Arena arena(mem, sizeof(mem));
+Evaluator eval(&arena, &outcome_syms);
 
-**Workshop paper** — embedded security policy verification using `core/` only —
-target: miniKanren Workshop at ICFP 2026, deadline late May 2026. Does not
-require the RAP layer.
+// Per-query
+ParsedQuery pq = parse_query(arena, "(run 5 (q) (call appendo (1 2) (3) q))");
+eval.runN(pq.n, pq.goal, pq.qvar, pq.vars_used, pq.rel_env,
+    [](Term answer, State) {
+        print_term(answer);
+    });
+arena.reset();
+```
+
+The caller owns the arena. The engine is a guest — it does not manage
+process lifetime, threads, or I/O.
 
 ---
 
-## Key Design Decisions (Do Not Revisit Without Good Reason)
+## Repository Layout
 
-- **`Probe` belongs in `core/`**, not in `rap/`. It is a core language
-  primitive used by both layers and by the security application.
-- **The agenda is a term**, not a separate data structure that gets converted
-  to a term on demand. This is load-bearing for the reflective agenda reasoning
-  contribution.
-- **ChangeSets are valid by construction** via `no-ops`/`cons-ops`. No
-  runtime validation step. Invalid operations cause construction to fail
-  relationally.
-- **Output queue is write-only** from the query's perspective. Queries cannot
-  observe pending output. This keeps the model clean; embedders who need
-  feedback can construct input queries from output data.
-- **Single-threaded, single-process**. No concurrency, no TOCTOU. The agenda
-  is modified only between query executions, so consistency is guaranteed by
-  construction.
+```
+docs/          Stage specifications (internal development documentation)
+core/          Self-contained engine — usable independently of the agenda layer
+rap/           Agenda layer — Queue 2, ChangeSet, reactive execution loop
+security/      Security policy case studies (depends on core/ only)
+```
+
+The `docs/` directory contains the stage-by-stage design specifications
+written during development. They document design decisions and the rationale
+behind them — useful context if you want to understand why things are the
+way they are.
+
+---
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).
+
