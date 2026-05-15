@@ -82,7 +82,7 @@ Mutual recursion via first-class anonymous relations:
     (== oddo  (rel (n) (fresh (m) (conj (== n (s m))
                                         (call eveno m)))))
     (call eveno q)))
-; => (0 (s s 0) (s s s s 0) ...)
+; => (0 (s (s 0)) (s (s (s (s 0)))) ...)
 ```
 
 Bounded meta-evaluation with `Probe` — the engine's novel primitive:
@@ -95,22 +95,24 @@ Bounded meta-evaluation with `Probe` — the engine's novel primitive:
 Disequality constraints:
 
 ```scheme
-(run 3 (q)
-  (fresh (x)
-    (=/= x foo)
-    (disj (== x foo) (== x bar) (== x baz))))
+(run 5 (q)
+  (conj (=/= q foo)
+        (disj (== q foo) (== q bar) (== q baz))))
 ; => (baz bar)   ; foo excluded by constraint
 ```
 
 Reflective agenda reasoning — a query that prunes redundant pending work:
 
 ```scheme
-(defrel (strengthen-agendao agenda ops)
-  (fresh (H T R strong-qid weak-qids ops0)
-    (membero (q strong-qid (check+ H T R)) agenda)
-    (collect-weak-qidso agenda H T weak-qids)
-    (qids->remove-opso weak-qids ops0)
-    (cons-ops (output (pruned H T)) ops0 ops)))
+
+   (defrel (strengthen-agendao agenda ops)
+     (fresh (H T R strong-qid weak-qids ops0 strong-item)
+       (conj
+         (call membero strong-item agenda)
+         (== strong-item (q strong-qid (check+ H T R)))
+         (call collect-weak-qidso agenda H T weak-qids)
+         (call qids->remove-opso weak-qids ops0)
+         (call cons-ops (output (pruned H T)) ops0 ops))))
 ```
 
 Given an agenda containing both `(check H T)` and `(check+ H T R)` entries,
@@ -137,8 +139,12 @@ rap/
 │   ├── spine.hpp           # Short-lived Pair nodes for agenda list term
 │   ├── loop.hpp            # Reactive execution loop (RapLoop)
 │   ├── rap.hpp             # RapEvaluator: no-ops, cons-ops, ClientRegion
+│   ├── rap_workquque.hpp   # Rap Work Queue
 │   ├── test_rap.cpp        # Extension mechanism tests
-│   └── test_stage2.cpp     # strengthen-agendao validation
+│   ├── test_rap_extension.cpp # Extension mechanism tests
+│   ├── test_stage2.cpp     # strengthen-agendao validation
+│   └── bench_stage2.cpp    # Benchmarking
+
 │
 ├── security/               # Embedded security policy case studies
 │   └── security_test.cpp   # RBAC + network policy, 10/10 correct
@@ -212,7 +218,7 @@ Simple structural queries are sub-2 µs.
 make test
 ```
 
-Runs five test binaries:
+Runs six test binaries:
 
 | Binary | What it tests |
 |---|---|
