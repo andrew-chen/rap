@@ -1,0 +1,7 @@
+; examples/echo.rkt — echo server: each input line is echoed to stdout
+
+(defrel (main args ops)
+  (call no-ops ops))
+
+(defrel (handle_input agenda fd input ops)
+  (call cons-ops (output input) (no-ops) ops))

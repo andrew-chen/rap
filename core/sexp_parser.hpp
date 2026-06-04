@@ -649,12 +649,30 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv,
     return nullptr;
   }
 
-  // Unrecognized operator
-  std::printf("[compile_goal] ERROR: unrecognized goal operator '%s' in: ",
-              op->str);
-  print_sexp(x);
-  std::printf("\n");
-  return nullptr;
+  // Unrecognized operator: compile as an implicit GoalCall.
+  // This allows arithmetic built-ins (leqo, addsubo, charo, etc.) and
+  // any user-defined relation to be invoked without the explicit (call ...)
+  // wrapper.  Unknown names fall through to handleKnownRelation /
+  // handleUnknownRelation at runtime.
+  {
+    Term rel_term = Term::symbol(op);
+    const SexpCell* c = x->list.head->cdr;  // args start after the operator
+
+    std::uint32_t arg_count = 0;
+    for (const SexpCell* t = c; t; t = t->cdr) ++arg_count;
+
+    const Term* args = nullptr;
+    if (arg_count > 0) {
+      Term* arr = static_cast<Term*>(
+          a.alloc(sizeof(Term) * arg_count, alignof(Term)));
+      if (!arr) return nullptr;
+      std::uint32_t i = 0;
+      for (const SexpCell* t = c; t; t = t->cdr)
+        arr[i++] = compile_term(a, genv, benv, t->car);
+      args = arr;
+    }
+    return make_call(a, rel_term, args, arg_count);
+  }
 }
 
 // ============================================================================
@@ -837,8 +855,23 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
       }
 
       out.goal = compile_goal(a, genv, nullptr, c->car);
-      if (!out.goal)
+      if (!out.goal) {
         std::printf("[parse_query] ERROR: goal compilation failed (see above for details)\n");
+        return out;
+      }
+      // Chain additional goals (if any) as left-nested conjunctions.
+      // (run N (q) g1 g2 g3) is sugar for (run N (q) (conj g1 (conj g2 g3))).
+      c = c->cdr;
+      while (c && c->car) {
+        const Goal* g2 = compile_goal(a, genv, nullptr, c->car);
+        if (!g2) {
+          std::printf("[parse_query] ERROR: goal compilation failed (see above for details)\n");
+          return out;
+        }
+        out.goal = make_conj(a, out.goal, g2);
+        if (!out.goal) return out;
+        c = c->cdr;
+      }
       return out;
     }
 
@@ -853,7 +886,242 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
     }
   }
 
+  // Defrel-only success: no 'run' form, but at least one defrel was defined.
+  if (out.rel_env.head != nullptr) {
+    out.n    = 0;
+    out.goal = nullptr;
+    return out;
+  }
+
   std::printf("[parse_query] ERROR: unexpected end of input (expected 'run' form)\n");
+  return out;
+}
+
+// ============================================================================
+// parse_query overload for REPL session use.
+// Uses an externally provided Intern and base RelEnv so the caller's long-lived
+// symbol table is shared.  New defrels are returned in pq.rel_env (empty base).
+// The caller is responsible for merging pq.rel_env into the session rel_env.
+//
+// IMPORTANT: pass intern_arena (not query_arena) as 'a' so that any newly
+// interned SymEntry objects survive query_arena resets.
+// ============================================================================
+inline ParsedQuery parse_query(Arena& a, const char* src,
+                               Intern& sess_intern,
+                               const RelEnv& sess_rel_env) {
+  ParsedQuery out{};
+  out.n         = 10;
+  out.qvar      = Term::nil();
+  out.vars_used = 0;
+  out.goal      = nullptr;
+  // Share the caller's intern table — new symbols are interned into 'a'.
+  out.intern    = sess_intern;
+
+  // Intern outcome symbols (no-ops if already present).
+  out.outcome_syms.s_true         = intern_cstr(a, out.intern, "true");
+  out.outcome_syms.s_false        = intern_cstr(a, out.intern, "false");
+  out.outcome_syms.s_insufficient = intern_cstr(a, out.intern, "insufficient");
+  out.outcome_syms.s_bounded      = intern_cstr(a, out.intern, "bounded");
+  if (!out.outcome_syms.s_true || !out.outcome_syms.s_false ||
+      !out.outcome_syms.s_insufficient || !out.outcome_syms.s_bounded) {
+    std::printf("[parse_query] ERROR: failed to intern outcome symbols (OOM?)\n");
+    out.goal = nullptr;
+    return out;
+  }
+
+  // Propagate any new intern entries back to the caller's Intern struct
+  // (capacity may have changed if the table was rehashed).
+  // We do this at the end; for now just work with out.intern.
+
+  // Use sess_rel_env as a read-only base for runtime call resolution.
+  // We start out.rel_env empty so pq.rel_env contains only NEW defrels.
+  // (Runtime lookup works via SymEntry::rel_cache set by define().)
+  (void)sess_rel_env;  // rel_cache on SymEntry provides runtime lookup
+
+  Lexer lx{src};
+  Token tok = lx.next();
+
+  while (tok.tag != TokTag::End) {
+    const Sexp* top = parse_sexp(a, out.intern, lx, tok);
+    if (!top) {
+      std::printf("[parse_query] ERROR: parse_sexp failed — malformed s-expression\n");
+      std::printf("[parse_query] Source: %s\n", src);
+      sess_intern = out.intern;
+      return out;
+    }
+
+    bool is_list = (top->tag == SexpTag::List);
+    const SymEntry* head_sym = nullptr;
+    if (is_list && top->list.head && top->list.head->car &&
+        top->list.head->car->tag == SexpTag::Sym)
+      head_sym = top->list.head->car->sym;
+
+    // ---- defrel ----
+    if (head_sym && sym_lit_eq(head_sym, "defrel")) {
+      const SexpCell* dc = top->list.head->cdr;
+
+      if (!dc || !dc->car || dc->car->tag != SexpTag::List) {
+        std::printf("[parse_query] ERROR: 'defrel' requires a name+param list\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      const SexpCell* name_and_params = dc->car->list.head;
+      if (!name_and_params || !name_and_params->car ||
+          name_and_params->car->tag != SexpTag::Sym) {
+        std::printf("[parse_query] ERROR: 'defrel' name must be a symbol\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      const SymEntry* rel_name   = name_and_params->car->sym;
+      const SexpCell* param_list = name_and_params->cdr;
+
+      const SymEntry* param_names[64];
+      std::uint32_t   param_count = 0;
+      for (const SexpCell* p = param_list; p; p = p->cdr) {
+        if (!p->car || p->car->tag != SexpTag::Sym) {
+          std::printf("[parse_query] ERROR: 'defrel' parameter must be a symbol\n");
+          sess_intern = out.intern;
+          return out;
+        }
+        if (param_count >= 64) {
+          std::printf("[parse_query] ERROR: 'defrel' has too many parameters\n");
+          sess_intern = out.intern;
+          return out;
+        }
+        param_names[param_count++] = p->car->sym;
+      }
+
+      dc = dc->cdr;
+      if (!dc || !dc->car) {
+        std::printf("[parse_query] ERROR: 'defrel' has no body\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      const BoundBind* rel_benv = nullptr;
+      for (std::uint32_t i = 0; i < param_count; ++i) {
+        rel_benv = bound_push(a, rel_benv, param_names[i]);
+        if (!rel_benv) {
+          std::printf("[parse_query] ERROR: OOM building rel benv\n");
+          sess_intern = out.intern;
+          return out;
+        }
+      }
+
+      const Goal* body = compile_goal(a, nullptr, rel_benv, dc->car);
+      if (!body) {
+        std::printf("[parse_query] ERROR: 'defrel' body failed to compile\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      RelNode* rn = a.make<RelNode>();
+      if (!rn) {
+        std::printf("[parse_query] ERROR: OOM allocating RelNode\n");
+        sess_intern = out.intern;
+        return out;
+      }
+      rn->param_count = param_count;
+      rn->body        = body;
+
+      out.rel_env.define(a, rel_name, Term::relation(rn));
+      continue;
+    }
+
+    // ---- run ----
+    if (head_sym && sym_lit_eq(head_sym, "run")) {
+      const SexpCell* c = top->list.head->cdr;
+
+      if (!c || !c->car || c->car->tag != SexpTag::Int) {
+        std::printf("[parse_query] ERROR: 'run' requires an integer count\n");
+        sess_intern = out.intern;
+        return out;
+      }
+      out.n = c->car->i;
+      c = c->cdr;
+
+      if (!c || !c->car || c->car->tag != SexpTag::List) {
+        std::printf("[parse_query] ERROR: 'run' requires a variable list\n");
+        sess_intern = out.intern;
+        return out;
+      }
+      const SexpCell* qcells = c->car->list.head;
+      if (!qcells || qcells->cdr) {
+        std::printf("[parse_query] ERROR: 'run' variable list must have exactly one variable\n");
+        sess_intern = out.intern;
+        return out;
+      }
+      if (!qcells->car || qcells->car->tag != SexpTag::Sym) {
+        std::printf("[parse_query] ERROR: 'run' query variable must be a symbol\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      const GlobalBind* genv = nullptr;
+      genv = global_add(a, genv, qcells->car->sym, 0);
+      if (!genv) {
+        std::printf("[parse_query] ERROR: OOM adding query variable\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      out.qvar      = Term::var(0);
+      out.vars_used = 1;
+
+      c = c->cdr;
+      if (!c || !c->car) {
+        std::printf("[parse_query] ERROR: 'run' has no goal\n");
+        sess_intern = out.intern;
+        return out;
+      }
+
+      out.goal = compile_goal(a, genv, nullptr, c->car);
+      if (!out.goal) {
+        std::printf("[parse_query] ERROR: goal compilation failed\n");
+        sess_intern = out.intern;
+        return out;
+      }
+      // Chain additional goals (multi-goal run sugar).
+      c = c->cdr;
+      while (c && c->car) {
+        const Goal* g2 = compile_goal(a, genv, nullptr, c->car);
+        if (!g2) {
+          std::printf("[parse_query] ERROR: goal compilation failed\n");
+          sess_intern = out.intern;
+          return out;
+        }
+        out.goal = make_conj(a, out.goal, g2);
+        if (!out.goal) { sess_intern = out.intern; return out; }
+        c = c->cdr;
+      }
+      sess_intern = out.intern;
+      return out;
+    }
+
+    // goal-only form (backward compat)
+    {
+      const SymEntry* qsym = intern_cstr(a, out.intern, "q");
+      const GlobalBind* genv = global_add(a, nullptr, qsym, 0);
+      out.goal = compile_goal(a, genv, nullptr, top);
+      if (!out.goal)
+        std::printf("[parse_query] ERROR: goal compilation failed\n");
+      sess_intern = out.intern;
+      return out;
+    }
+  }
+
+  // Defrel-only success
+  if (out.rel_env.head != nullptr) {
+    out.n    = 0;
+    out.goal = nullptr;
+    sess_intern = out.intern;
+    return out;
+  }
+
+  std::printf("[parse_query] ERROR: unexpected end of input\n");
+  sess_intern = out.intern;
   return out;
 }
 

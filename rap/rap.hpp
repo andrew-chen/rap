@@ -23,7 +23,7 @@ public:
   // client-region buffer (must NOT be reset between queries).
   RapEvaluator(Arena* working_arena, Arena* permanent_arena,
                Intern* intern, const OutcomeSyms* syms)
-    : Evaluator(working_arena, syms)
+    : Evaluator(working_arena, permanent_arena, intern, syms)
   {
     // Intern relation names once into the permanent arena so they survive
     // eval_arena resets.  Uses pointer-identity comparison at runtime.

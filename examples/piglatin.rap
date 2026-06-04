@@ -1,0 +1,59 @@
+; examples/piglatin.rap — pig latin translator
+; Demonstrates: recursive list relations, relational bidirectionality.
+; Run forward:  translate a word to pig latin
+; Run backward: given pig latin, recover the original word
+;
+; Pig latin rule (simplified):
+;   move the first letter to the end and append ay
+;   e.g. (h e l l o) -> (e l l o h ay)
+;
+; Commands:
+;   to <letter> <letter> ...    — translate word to pig latin
+;   from <letter> <letter> ...  — translate pig latin back to word
+;
+; Run with: ./raprunner examples/piglatin.rap
+
+(defrel (appendo l r out)
+  (disj
+    (conj (== l ()) (== out r))
+    (fresh (h t res)
+      (conj
+        (== l (h . t))
+        (== out (h . res))
+        (call appendo t r res)))))
+
+(defrel (pig-latino original piglatin)
+  (fresh (first rest rotated)
+    (conj
+      (== original (first . rest))
+      (call appendo rest (first . ()) rotated)
+      (call appendo rotated (ay . ()) piglatin))))
+
+(defrel (main args ops)
+  (call cons-ops (output pig-latin-ready) (no-ops) ops))
+
+(defrel (handle_input agenda fd input ops)
+  (disj
+    ; to <letters>: translate to pig latin
+    (fresh (letters pig)
+      (conj
+        (== input (to . letters))
+        (call pig-latino letters pig)
+        (call cons-ops (output (pig-latin pig)) (no-ops) ops)))
+
+    ; from <letters>: recover original from pig latin
+    (fresh (pig original)
+      (conj
+        (== input (from . pig))
+        (call pig-latino original pig)
+        (call cons-ops (output (original original)) (no-ops) ops)))
+
+    ; unknown: head is neither 'to' nor 'from'
+    (fresh (head tail)
+      (conj
+        (== input (head . tail))
+        (=/= head to)
+        (=/= head from)
+        (call cons-ops (output (usage to-letters from-piglatin)) (no-ops) ops)))))
+
+

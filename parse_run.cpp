@@ -92,7 +92,7 @@ int main() {
     }
 
     std::printf("Results:\n");
-    Evaluator eval(&a, &pq.outcome_syms);
+    Evaluator eval(&a, &a, &pq.intern, &pq.outcome_syms);
     eval.runN(pq.n, pq.goal, pq.qvar, pq.vars_used, pq.rel_env,
       [&](Term ans, State /*st*/) {
         std::printf("  ");

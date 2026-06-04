@@ -2,7 +2,8 @@ CXX      ?= clang++
 CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -pedantic -Werror
 
 all: parse_run test_rap security/security_test \
-     core_test_extension rap_test_extension test_stage2
+     core_test_extension rap_test_extension test_stage2 \
+     repl raprunner test_arith
 
 parse_run: parse_run.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -35,9 +36,24 @@ test_stage2: rap/test_stage2.cpp \
     core/intern.hpp core/arena.hpp core/mktypes.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+repl: repl.cpp core/sexp_parser.hpp core/core.hpp \
+      core/intern.hpp core/arena.hpp core/mktypes.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+raprunner: raprunner.cpp \
+    rap/loop.hpp rap/agenda.hpp rap/spine.hpp rap/changeset.hpp \
+    rap/rap.hpp core/sexp_parser.hpp core/core.hpp \
+    core/intern.hpp core/arena.hpp core/mktypes.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+test_arith: core/test_arith.cpp core/sexp_parser.hpp core/core.hpp \
+            core/intern.hpp core/arena.hpp core/mktypes.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 clean:
 	rm -f parse_run.o parse_run rap/test_rap.o test_rap security/security_test \
-	      core_test_extension rap_test_extension test_stage2
+	      core_test_extension rap_test_extension test_stage2 repl raprunner \
+	      test_arith
 
 run: parse_run
 	./parse_run
@@ -49,6 +65,7 @@ test: all
 	./core_test_extension
 	./rap_test_extension
 	./test_stage2
+	./test_arith
 	@echo "All tests complete."
 
 .PHONY: all clean run test

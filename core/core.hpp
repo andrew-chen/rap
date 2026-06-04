@@ -4,7 +4,12 @@
 #include "intern.hpp"
 #include <cstdint>
 
-enum class StepResult : std::uint8_t { NoYield, Yield, OOM };
+enum class StepResult : std::uint8_t {
+  NoYield,
+  Yield,
+  OOM,
+  NotHandled,   // returned only by handleKnownRelation: "I didn't recognize this name"
+};
 
 // Maximum bytes in the client region (Stage 0B).
 // 16 KiB is sufficient for all paper examples.
@@ -160,12 +165,26 @@ struct Binding {
 };
 static_assert(std::is_trivially_destructible_v<Binding>);
 
-struct Diseq {
-  Term u;
-  Term v;
-  const Diseq* next;
+// STAGE_ARITH: extended constraint store.
+// A constraint fires (causes failure) when its condition is true.
+// ConstraintRel::Eq is used for =/= : fire if walk(u) == walk(v) + offset.
+enum class ConstraintRel : std::uint8_t {
+  Eq,   // fires when walk(u) == walk(v) + offset  (used by =/=)
+  Ne,   // fires when walk(u) != walk(v) + offset
+  Lt,   // fires when walk(u) <  walk(v) + offset
+  Le,   // fires when walk(u) <= walk(v) + offset
+  Gt,   // fires when walk(u) >  walk(v) + offset
+  Ge,   // fires when walk(u) >= walk(v) + offset
 };
-static_assert(std::is_trivially_destructible_v<Diseq>);
+
+struct Constraint {
+  Term              u;
+  Term              v;
+  std::int64_t      offset;
+  ConstraintRel     rel;
+  const Constraint* next;
+};
+static_assert(std::is_trivially_destructible_v<Constraint>);
 
 // Runtime environment stack for bound vars (de Bruijn):
 struct EnvFrame {
@@ -175,11 +194,11 @@ struct EnvFrame {
 static_assert(std::is_trivially_destructible_v<EnvFrame>);
 
 struct State {
-  const Binding*  subst;
-  const Diseq*    diseqs;
-  const EnvFrame* env;
-  std::uint32_t   counter;
-  std::uint32_t   client_offset;  // Stage 0B: saved/restored with State on backtrack
+  const Binding*    subst;
+  const Constraint* constraints;  // STAGE_ARITH: renamed from diseqs
+  const EnvFrame*   env;
+  std::uint32_t     counter;
+  std::uint32_t     client_offset;  // Stage 0B: saved/restored with State on backtrack
 };
 static_assert(std::is_trivially_destructible_v<State>);
 
@@ -536,6 +555,102 @@ inline const Goal* make_call(Arena& a, Term rel_term, const Term* args,
 }
 
 
+// ============================================================================
+// deep_copy_term: deep-copies a term into dest, rewriting PairNode* pointers.
+// Sym/Rel/scalar terms are returned as-is (their payloads are stable pointers).
+// ============================================================================
+inline Term deep_copy_term(Arena& dest, Term t) {
+  switch (t.tag) {
+    case TermTag::Nil:
+    case TermTag::Int:
+    case TermTag::Sym:
+    case TermTag::Var:
+    case TermTag::BVar:
+    case TermTag::Rel:
+      return t;
+    case TermTag::Pair: {
+      if (!t.pair) return t;
+      PairNode* p = dest.make<PairNode>();
+      if (!p) return Term::nil();
+      p->car = deep_copy_term(dest, t.pair->car);
+      p->cdr = deep_copy_term(dest, t.pair->cdr);
+      return Term::make_pair(p);
+    }
+    default:
+      return Term::nil();
+  }
+}
+
+// ============================================================================
+// deep_copy_goal: deep-copies a Goal tree from its arena into dest.
+// Required to persist defrel bodies across query_arena resets.
+// Recursively copies all Goal* and Term fields; RelNode bodies in Rel terms
+// are also copied so they don't dangle when the source arena is reset.
+// ============================================================================
+inline const Goal* deep_copy_goal(Arena& dest, const Goal* g) {
+  if (!g) return nullptr;
+  Goal* copy = dest.make<Goal>();
+  if (!copy) return nullptr;
+  copy->tag = g->tag;
+  switch (g->tag) {
+    case GoalTag::Eq:
+      copy->eq.u = deep_copy_term(dest, g->eq.u);
+      copy->eq.v = deep_copy_term(dest, g->eq.v);
+      break;
+    case GoalTag::Diseq:
+      copy->diseq.u = deep_copy_term(dest, g->diseq.u);
+      copy->diseq.v = deep_copy_term(dest, g->diseq.v);
+      break;
+    case GoalTag::Disj:
+    case GoalTag::Conj:
+      copy->bin.g1 = deep_copy_goal(dest, g->bin.g1);
+      copy->bin.g2 = deep_copy_goal(dest, g->bin.g2);
+      break;
+    case GoalTag::Fresh:
+      copy->fresh.n    = g->fresh.n;
+      copy->fresh.body = deep_copy_goal(dest, g->fresh.body);
+      break;
+    case GoalTag::Probe:
+      copy->probe.sub        = deep_copy_goal(dest, g->probe.sub);
+      copy->probe.condition  = deep_copy_term(dest, g->probe.condition);
+      copy->probe.max_iter   = deep_copy_term(dest, g->probe.max_iter);
+      copy->probe.sandbox    = deep_copy_term(dest, g->probe.sandbox);
+      copy->probe.req_ground = deep_copy_term(dest, g->probe.req_ground);
+      break;
+    case GoalTag::Call: {
+      Term rt = g->call.rel_term;
+      // Deep-copy RelNode bodies reachable via Rel terms so they survive
+      // a source-arena reset.
+      if (rt.tag == TermTag::Rel && rt.rel) {
+        RelNode* rn = dest.make<RelNode>();
+        if (rn) {
+          rn->param_count = rt.rel->param_count;
+          rn->body        = deep_copy_goal(dest, rt.rel->body);
+          rt = Term::relation(rn);
+        }
+      }
+      copy->call.rel_term  = rt;
+      copy->call.arg_count = g->call.arg_count;
+      if (g->call.arg_count > 0 && g->call.args) {
+        Term* args = static_cast<Term*>(
+            dest.alloc(g->call.arg_count * sizeof(Term), alignof(Term)));
+        if (args) {
+          for (std::uint32_t i = 0; i < g->call.arg_count; ++i)
+            args[i] = deep_copy_term(dest, g->call.args[i]);
+        }
+        copy->call.args = args;
+      } else {
+        copy->call.args = nullptr;
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return copy;
+}
+
+
 // ---- Fair evaluator: explicit continuation + FIFO work queue ----
 //
 // KontTag::RestoreEnv is used by GoalTag::Call to restore the CALLER's env
@@ -635,20 +750,43 @@ inline StepResult apply_k_or_yield(Arena& a, WorkQueue& q, State st,
 
 
 // ============================================================================
-// check_diseqs: verify no active disequality constraint is violated by s.
-// A constraint (u ≠ v) is violated iff unify(u, v, s) succeeds without adding
-// new bindings (u and v are already equal under s).
-// Returns true if all constraints hold; false if any is violated.
+// check_constraints: verify no active constraint fires under substitution s.
+// A constraint fires when its condition evaluates to true (causing failure).
+// Returns true if all constraints hold (none fire); false if any fires.
 // ============================================================================
-inline bool check_diseqs(Arena& a, const Diseq* diseqs,
-                          const Binding* s, const RelEnv& rel_env) {
-  for (const Diseq* d = diseqs; d; d = d->next) {
-    const Binding* s2 = s;
-    bool ok = unify(a, d->u, d->v, nullptr, s2, rel_env);
-    if (ok && s2 == s) {
-      // Unification succeeded with no new bindings — u and v already equal.
-      return false;
+inline bool check_constraints(Arena& a, const Constraint* cs,
+                               const Binding* s, const RelEnv& rel_env) {
+  for (const Constraint* c = cs; c; c = c->next) {
+    Term u = walk(c->u, s, rel_env);
+    Term v = walk(c->v, s, rel_env);
+
+    // If either side is still an unbound Var, defer — not yet checkable.
+    if (u.tag == TermTag::Var || v.tag == TermTag::Var) continue;
+
+    // Both sides are ground.
+    if (u.tag == TermTag::Int && v.tag == TermTag::Int) {
+      std::int64_t uval = static_cast<std::int64_t>(u.value);
+      std::int64_t vval = static_cast<std::int64_t>(v.value) + c->offset;
+      bool fires = false;
+      switch (c->rel) {
+        case ConstraintRel::Eq: fires = (uval == vval); break;
+        case ConstraintRel::Ne: fires = (uval != vval); break;
+        case ConstraintRel::Lt: fires = (uval <  vval); break;
+        case ConstraintRel::Le: fires = (uval <= vval); break;
+        case ConstraintRel::Gt: fires = (uval >  vval); break;
+        case ConstraintRel::Ge: fires = (uval >= vval); break;
+      }
+      if (fires) return false;
+      continue;
     }
+
+    // Both sides ground non-integers: only Eq (from =/=) is meaningful.
+    if (c->rel == ConstraintRel::Eq) {
+      const Binding* s2 = s;
+      bool unified = unify(a, u, v, nullptr, s2, rel_env);
+      if (unified && s2 == s) return false;  // already equal — fires
+    }
+    // Ne/Lt/Le/Gt/Ge on non-integer ground terms: skip (undefined behavior).
   }
   return true;
 }
@@ -658,19 +796,46 @@ inline bool check_diseqs(Arena& a, const Diseq* diseqs,
 //
 // step() and runN() live here as methods.
 // handleUnknownRelation is the single protected virtual extension point.
+// handleKnownRelation is a non-virtual method for core built-ins; it is
+// called by step() before handleUnknownRelation and cannot be overridden.
 // ============================================================================
 class Evaluator {
 public:
-  // Caller provides arena and outcome syms (injected, not owned).
-  // The Evaluator base class does NOT store Intern* — all symbol comparison
-  // at runtime uses SymEntry* pointer identity (interning is done at parse time).
+  // Legacy 2-arg constructor for backward compatibility.
+  // (Used by test_extension.cpp, the backward-compat runN free function, etc.)
+  // With no Intern provided, arithmetic built-ins are unavailable.
   Evaluator(Arena* arena, const OutcomeSyms* syms)
-    : arena_(arena), syms_(syms)
+    : Evaluator(arena, arena, nullptr, syms) {}
+
+  // Full constructor.
+  // working_arena:  per-query scratch space (may be reset between queries).
+  // sym_arena:      stable arena for built-in name interning and charo symbols.
+  //                 Pass a permanent arena (e.g. intern_arena) when the
+  //                 Evaluator outlives individual query_arena resets.
+  // intern:         symbol table used to intern built-in names and charo chars.
+  // syms:           outcome symbols for probe evaluation.
+  Evaluator(Arena* working_arena, Arena* sym_arena, Intern* intern,
+            const OutcomeSyms* syms)
+    : arena_(working_arena), sym_arena_(sym_arena), intern_(intern), syms_(syms)
   {
     client_region_.id       = ClientId::None;
     client_region_.base     = nullptr;
     client_region_.capacity = 0;
     client_region_.offset   = 0;
+    // Intern all nine built-in arithmetic/comparison relation names once.
+    // With intern==nullptr (legacy path) all sym pointers stay nullptr and
+    // handleKnownRelation never matches — arithmetic is simply unavailable.
+    if (intern_ && sym_arena_) {
+      sym_leqo_       = intern_cstr(*sym_arena_, *intern_, "leqo");
+      sym_lto_        = intern_cstr(*sym_arena_, *intern_, "lto");
+      sym_geqo_       = intern_cstr(*sym_arena_, *intern_, "geqo");
+      sym_gto_        = intern_cstr(*sym_arena_, *intern_, "gto");
+      sym_eqo_        = intern_cstr(*sym_arena_, *intern_, "eqo");
+      sym_neqo_       = intern_cstr(*sym_arena_, *intern_, "neqo");
+      sym_addsubo_    = intern_cstr(*sym_arena_, *intern_, "addsubo");
+      sym_multaddiso_ = intern_cstr(*sym_arena_, *intern_, "multaddiso");
+      sym_charo_      = intern_cstr(*sym_arena_, *intern_, "charo");
+    }
   }
 
   // Non-copyable, non-movable.
@@ -715,10 +880,53 @@ protected:
       State&          st);
 
   Arena*             arena_;
+  Arena*             sym_arena_;  // STAGE_ARITH: for stable symbol allocation
+  Intern*            intern_;     // STAGE_ARITH: for charo and built-in name interning
   const OutcomeSyms* syms_;
   ClientRegion       client_region_;
 
 private:
+  // ---- Core built-in dispatch (non-virtual; called before handleUnknownRelation) ----
+  // Returns NotHandled if the name is not a known built-in.
+  // Returns NoYield/OOM/Yield/apply_k_or_yield result when handled.
+  StepResult handleKnownRelation(
+      const SymEntry* name, const Term* args, std::uint32_t arg_count,
+      State& st, Arena& a, WorkQueue& q,
+      const Kont* k, Work* w, State& yielded, const RelEnv& rel_env);
+
+  // ---- Built-in handlers (each returns NoYield on failure, or apply_k_or_yield) ----
+  StepResult handle_leqo      (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_lto       (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_geqo      (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_gto       (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_eqo       (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_neqo      (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_addsubo   (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_multaddiso(const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_charo     (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+
+  // Helper: add a constraint and continue.
+  StepResult add_constraint(Term u, Term v, std::int64_t offset, ConstraintRel rel,
+                             State& st, Arena& a, WorkQueue& q,
+                             const Kont* k, Work* w, State& yielded);
+
+  // Helper: unify one term with another and continue (used by eqo/addsubo/etc.).
+  StepResult unify_and_continue(Term lhs, Term rhs,
+                                 State& st, Arena& a, WorkQueue& q,
+                                 const Kont* k, Work* w, State& yielded,
+                                 const RelEnv& rel_env);
+
+  // Built-in name pointers (interned at construction; nullptr if intern==nullptr).
+  const SymEntry* sym_leqo_       = nullptr;
+  const SymEntry* sym_lto_        = nullptr;
+  const SymEntry* sym_geqo_       = nullptr;
+  const SymEntry* sym_gto_        = nullptr;
+  const SymEntry* sym_eqo_        = nullptr;
+  const SymEntry* sym_neqo_       = nullptr;
+  const SymEntry* sym_addsubo_    = nullptr;
+  const SymEntry* sym_multaddiso_ = nullptr;
+  const SymEntry* sym_charo_      = nullptr;
+
   StepResult step(Work* w, WorkQueue& q,
                   const RelEnv& rel_env, State& yielded);
   void probe_run(const Goal* goal, State st,
@@ -732,6 +940,375 @@ inline StepResult Evaluator::handleUnknownRelation(
     std::uint32_t arg_count, State& st)
 {
   (void)name; (void)args; (void)arg_count; (void)st;
+  return StepResult::NoYield;
+}
+
+
+// ============================================================================
+// STAGE_ARITH: built-in handler helpers
+// ============================================================================
+
+// add_constraint: record a constraint and continue with the updated state.
+inline StepResult Evaluator::add_constraint(
+    Term u, Term v, std::int64_t offset, ConstraintRel rel,
+    State& st, Arena& a, WorkQueue& q,
+    const Kont* k, Work* w, State& yielded)
+{
+  Constraint* c = a.make<Constraint>();
+  if (!c) return StepResult::OOM;
+  c->u      = u;
+  c->v      = v;
+  c->offset = offset;
+  c->rel    = rel;
+  c->next   = st.constraints;
+  State st2{ st.subst, c, st.env, st.counter, st.client_offset };
+  return apply_k_or_yield(a, q, st2, k, w, yielded);
+}
+
+// unify_and_continue: unify lhs with rhs, check constraints, and continue.
+inline StepResult Evaluator::unify_and_continue(
+    Term lhs, Term rhs,
+    State& st, Arena& a, WorkQueue& q,
+    const Kont* k, Work* w, State& yielded,
+    const RelEnv& rel_env)
+{
+  const Binding* s = st.subst;
+  if (!unify(a, lhs, rhs, nullptr, s, rel_env)) return StepResult::NoYield;
+  if (!check_constraints(a, st.constraints, s, rel_env)) return StepResult::NoYield;
+  State st2{ s, st.constraints, st.env, st.counter, st.client_offset };
+  return apply_k_or_yield(a, q, st2, k, w, yielded);
+}
+
+// handleKnownRelation: dispatch to built-in handlers.
+inline StepResult Evaluator::handleKnownRelation(
+    const SymEntry* name, const Term* args, std::uint32_t arg_count,
+    State& st, Arena& a, WorkQueue& q,
+    const Kont* k, Work* w, State& yielded, const RelEnv& rel_env)
+{
+  if (name == sym_leqo_)       return handle_leqo      (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_lto_)        return handle_lto       (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_geqo_)       return handle_geqo      (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_gto_)        return handle_gto       (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_eqo_)        return handle_eqo       (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_neqo_)       return handle_neqo      (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_addsubo_)    return handle_addsubo   (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_multaddiso_) return handle_multaddiso(args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_charo_)      return handle_charo     (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  return StepResult::NotHandled;
+}
+
+// ============================================================================
+// Comparison built-ins
+// ============================================================================
+
+// leqo: (leqo a b) means a <= b
+inline StepResult Evaluator::handle_leqo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term ua = args[0]; Term ub = args[1];
+  bool a_bound = (ua.tag == TermTag::Int);
+  bool b_bound = (ub.tag == TermTag::Int);
+  bool a_var   = (ua.tag == TermTag::Var);
+  bool b_var   = (ub.tag == TermTag::Var);
+  if (a_bound && b_bound) {
+    if (static_cast<std::int64_t>(ua.value) <= static_cast<std::int64_t>(ub.value))
+      return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (a_var && b_bound)  return add_constraint(ua, ub, 0, ConstraintRel::Gt,  st, a, q, k, w, y);
+  if (b_var && a_bound)  return add_constraint(ub, ua, 0, ConstraintRel::Lt,  st, a, q, k, w, y);
+  (void)re; (void)b_var; (void)a_var;
+  return StepResult::NoYield;
+}
+
+// lto: (lto a b) means a < b
+inline StepResult Evaluator::handle_lto(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term ua = args[0]; Term ub = args[1];
+  bool a_bound = (ua.tag == TermTag::Int);
+  bool b_bound = (ub.tag == TermTag::Int);
+  bool a_var   = (ua.tag == TermTag::Var);
+  bool b_var   = (ub.tag == TermTag::Var);
+  if (a_bound && b_bound) {
+    if (static_cast<std::int64_t>(ua.value) < static_cast<std::int64_t>(ub.value))
+      return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (a_var && b_bound)  return add_constraint(ua, ub, 0, ConstraintRel::Ge,  st, a, q, k, w, y);
+  if (b_var && a_bound)  return add_constraint(ub, ua, 0, ConstraintRel::Le,  st, a, q, k, w, y);
+  (void)re; (void)b_var; (void)a_var;
+  return StepResult::NoYield;
+}
+
+// geqo: (geqo a b) means a >= b
+inline StepResult Evaluator::handle_geqo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term ua = args[0]; Term ub = args[1];
+  bool a_bound = (ua.tag == TermTag::Int);
+  bool b_bound = (ub.tag == TermTag::Int);
+  bool a_var   = (ua.tag == TermTag::Var);
+  bool b_var   = (ub.tag == TermTag::Var);
+  if (a_bound && b_bound) {
+    if (static_cast<std::int64_t>(ua.value) >= static_cast<std::int64_t>(ub.value))
+      return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (a_var && b_bound)  return add_constraint(ua, ub, 0, ConstraintRel::Lt,  st, a, q, k, w, y);
+  if (b_var && a_bound)  return add_constraint(ub, ua, 0, ConstraintRel::Gt,  st, a, q, k, w, y);
+  (void)re; (void)b_var; (void)a_var;
+  return StepResult::NoYield;
+}
+
+// gto: (gto a b) means a > b
+inline StepResult Evaluator::handle_gto(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term ua = args[0]; Term ub = args[1];
+  bool a_bound = (ua.tag == TermTag::Int);
+  bool b_bound = (ub.tag == TermTag::Int);
+  bool a_var   = (ua.tag == TermTag::Var);
+  bool b_var   = (ub.tag == TermTag::Var);
+  if (a_bound && b_bound) {
+    if (static_cast<std::int64_t>(ua.value) > static_cast<std::int64_t>(ub.value))
+      return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (a_var && b_bound)  return add_constraint(ua, ub, 0, ConstraintRel::Le,  st, a, q, k, w, y);
+  if (b_var && a_bound)  return add_constraint(ub, ua, 0, ConstraintRel::Ge,  st, a, q, k, w, y);
+  (void)re; (void)b_var; (void)a_var;
+  return StepResult::NoYield;
+}
+
+// eqo: (eqo a b) means a == b (numeric).
+// With one unbound, reduces to unification (same as ==).
+inline StepResult Evaluator::handle_eqo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term ua = args[0]; Term ub = args[1];
+  bool a_int = (ua.tag == TermTag::Int);
+  bool b_int = (ub.tag == TermTag::Int);
+  bool a_var = (ua.tag == TermTag::Var);
+  bool b_var = (ub.tag == TermTag::Var);
+  if (a_int && b_int) {
+    if (ua.value == ub.value) return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  // One unbound: unify (eqo with one unbound reduces to ==)
+  if (a_var && b_int) return unify_and_continue(ua, ub, st, a, q, k, w, y, re);
+  if (b_var && a_int) return unify_and_continue(ub, ua, st, a, q, k, w, y, re);
+  return StepResult::NoYield;  // both unbound, or non-integers
+}
+
+// neqo: (neqo a b) means a != b (numeric).
+// With one unbound, records an Eq constraint (same as =/= for integers).
+inline StepResult Evaluator::handle_neqo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term ua = args[0]; Term ub = args[1];
+  bool a_int = (ua.tag == TermTag::Int);
+  bool b_int = (ub.tag == TermTag::Int);
+  bool a_var = (ua.tag == TermTag::Var);
+  bool b_var = (ub.tag == TermTag::Var);
+  if (a_int && b_int) {
+    if (ua.value != ub.value) return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (a_var && b_int) return add_constraint(ua, ub, 0, ConstraintRel::Eq, st, a, q, k, w, y);
+  if (b_var && a_int) return add_constraint(ub, ua, 0, ConstraintRel::Eq, st, a, q, k, w, y);
+  (void)re; (void)b_var; (void)a_var;
+  return StepResult::NoYield;
+}
+
+// ============================================================================
+// addsubo: (addsubo a b c) means a + b = c
+// ============================================================================
+inline StepResult Evaluator::handle_addsubo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 3) return StepResult::NoYield;
+  Term ta = args[0]; Term tb = args[1]; Term tc = args[2];
+  bool a_var = (ta.tag == TermTag::Var);
+  bool b_var = (tb.tag == TermTag::Var);
+  bool c_var = (tc.tag == TermTag::Var);
+  bool a_int = (ta.tag == TermTag::Int);
+  bool b_int = (tb.tag == TermTag::Int);
+  bool c_int = (tc.tag == TermTag::Int);
+
+  int unbound = (a_var ? 1 : 0) + (b_var ? 1 : 0) + (c_var ? 1 : 0);
+  if (unbound >= 2) return StepResult::NoYield;
+
+  if (a_int && b_int && c_int) {
+    std::int64_t av = ta.value, bv = tb.value, cv = tc.value;
+    if (av + bv == cv) return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (c_var && a_int && b_int) {
+    std::int32_t result = static_cast<std::int32_t>(
+        static_cast<std::int64_t>(ta.value) + static_cast<std::int64_t>(tb.value));
+    return unify_and_continue(tc, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (a_var && b_int && c_int) {
+    std::int32_t result = static_cast<std::int32_t>(
+        static_cast<std::int64_t>(tc.value) - static_cast<std::int64_t>(tb.value));
+    return unify_and_continue(ta, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (b_var && a_int && c_int) {
+    std::int32_t result = static_cast<std::int32_t>(
+        static_cast<std::int64_t>(tc.value) - static_cast<std::int64_t>(ta.value));
+    return unify_and_continue(tb, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  return StepResult::NoYield;  // non-integer ground term
+}
+
+// ============================================================================
+// multaddiso: (multaddiso a b c d) means a * b + c = d
+// ============================================================================
+inline StepResult Evaluator::handle_multaddiso(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 4) return StepResult::NoYield;
+  Term ta = args[0]; Term tb = args[1]; Term tc = args[2]; Term td = args[3];
+  bool a_var = (ta.tag == TermTag::Var);
+  bool b_var = (tb.tag == TermTag::Var);
+  bool c_var = (tc.tag == TermTag::Var);
+  bool d_var = (td.tag == TermTag::Var);
+  bool a_int = (ta.tag == TermTag::Int);
+  bool b_int = (tb.tag == TermTag::Int);
+  bool c_int = (tc.tag == TermTag::Int);
+  bool d_int = (td.tag == TermTag::Int);
+
+  int unbound = (a_var ? 1 : 0) + (b_var ? 1 : 0) + (c_var ? 1 : 0) + (d_var ? 1 : 0);
+  if (unbound >= 2) return StepResult::NoYield;
+
+  // Ensure any ground arg is actually Int.
+  if (!a_var && !a_int) return StepResult::NoYield;
+  if (!b_var && !b_int) return StepResult::NoYield;
+  if (!c_var && !c_int) return StepResult::NoYield;
+  if (!d_var && !d_int) return StepResult::NoYield;
+
+  std::int64_t av = a_int ? static_cast<std::int64_t>(ta.value) : 0;
+  std::int64_t bv = b_int ? static_cast<std::int64_t>(tb.value) : 0;
+  std::int64_t cv = c_int ? static_cast<std::int64_t>(tc.value) : 0;
+  std::int64_t dv = d_int ? static_cast<std::int64_t>(td.value) : 0;
+
+  if (a_int && b_int && c_int && d_int) {
+    if (av * bv + cv == dv) return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (d_var) { // a, b, c bound
+    std::int32_t result = static_cast<std::int32_t>(av * bv + cv);
+    return unify_and_continue(td, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (c_var) { // a, b, d bound
+    std::int32_t result = static_cast<std::int32_t>(dv - av * bv);
+    return unify_and_continue(tc, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (a_var) { // b, c, d bound
+    if (bv == 0) return StepResult::NoYield;  // division by zero / unconstrained
+    std::int64_t num = dv - cv;
+    if (num % bv != 0) return StepResult::NoYield;  // not exactly divisible
+    std::int32_t result = static_cast<std::int32_t>(num / bv);
+    return unify_and_continue(ta, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (b_var) { // a, c, d bound
+    if (av == 0) return StepResult::NoYield;  // division by zero / unconstrained
+    std::int64_t num = dv - cv;
+    if (num % av != 0) return StepResult::NoYield;  // not exactly divisible
+    std::int32_t result = static_cast<std::int32_t>(num / av);
+    return unify_and_continue(tb, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  return StepResult::NoYield;
+}
+
+// ============================================================================
+// charo: (charo c n) — c is a single-char symbol, n is its ASCII int value
+// ============================================================================
+inline StepResult Evaluator::handle_charo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 2) return StepResult::NoYield;
+  Term tc = args[0]; Term tn = args[1];
+  bool c_var = (tc.tag == TermTag::Var);
+  bool n_var = (tn.tag == TermTag::Var);
+  bool c_sym = (tc.tag == TermTag::Sym);
+  bool n_int = (tn.tag == TermTag::Int);
+
+  if (c_sym && n_int) {
+    // Both bound: verify
+    if (!tc.sym || tc.sym->len != 1) return StepResult::NoYield;
+    std::int64_t n_val = static_cast<std::int64_t>(tn.value);
+    std::int64_t c_val = static_cast<std::int64_t>(
+        static_cast<unsigned char>(tc.sym->str[0]));
+    if (n_val == c_val) return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+  if (c_sym && n_var) {
+    // c bound (sym), n unbound: compute n = ASCII(c[0])
+    if (!tc.sym || tc.sym->len != 1) return StepResult::NoYield;
+    std::int32_t n_val = static_cast<std::int32_t>(
+        static_cast<unsigned char>(tc.sym->str[0]));
+    return unify_and_continue(tn, Term::integer(n_val), st, a, q, k, w, y, re);
+  }
+  if (n_int && c_var) {
+    // n bound, c unbound: look up character
+    std::int64_t n_val = static_cast<std::int64_t>(tn.value);
+    if (n_val < 1 || n_val > 127) return StepResult::NoYield;
+    if (!intern_ || !sym_arena_) return StepResult::NoYield;
+    char buf[2] = { static_cast<char>(static_cast<std::uint8_t>(n_val)), '\0' };
+    const SymEntry* s = intern_cstr(*sym_arena_, *intern_, buf);
+    if (!s) return StepResult::NoYield;
+    return unify_and_continue(tc, Term::symbol(s), st, a, q, k, w, y, re);
+  }
+  if (c_var && n_var) {
+    // Both unbound: enumerate printable ASCII 32..126
+    if (!intern_ || !sym_arena_) return StepResult::NoYield;
+    for (int n = 32; n <= 126; ++n) {
+      char buf[2] = { static_cast<char>(n), '\0' };
+      const SymEntry* s = intern_cstr(*sym_arena_, *intern_, buf);
+      if (!s) continue;
+      // Build goal: (conj (== tc sym_n) (== tn int_n))
+      const Goal* g_c    = make_eq(a, tc, Term::symbol(s));
+      const Goal* g_n    = make_eq(a, tn, Term::integer(n));
+      if (!g_c || !g_n) return StepResult::OOM;
+      const Goal* g_both = make_conj(a, g_c, g_n);
+      if (!g_both) return StepResult::OOM;
+      Work* wi = a.make<Work>();
+      if (!wi) return StepResult::OOM;
+      wi->g  = g_both;
+      wi->st = st;
+      wi->k  = k;
+      q.push(wi);
+    }
+    // All 95 work items pushed; no single success here.
+    return StepResult::NoYield;
+  }
+  (void)re;
   return StepResult::NoYield;
 }
 
@@ -788,8 +1365,8 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
     case GoalTag::Eq: {
       const Binding* s = st.subst;
       if (!unify(a, g->eq.u, g->eq.v, st.env, s, rel_env)) return StepResult::NoYield;
-      if (!check_diseqs(a, st.diseqs, s, rel_env)) return StepResult::NoYield;
-      State st2{ s, st.diseqs, st.env, st.counter, st.client_offset };
+      if (!check_constraints(a, st.constraints, s, rel_env)) return StepResult::NoYield;
+      State st2{ s, st.constraints, st.env, st.counter, st.client_offset };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
@@ -829,7 +1406,7 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
         env2       = ef;
       }
 
-      State st2{ st.subst, st.diseqs, env2, st.counter, st.client_offset };
+      State st2{ st.subst, st.constraints, env2, st.counter, st.client_offset };
       w->g  = g->fresh.body;
       w->st = st2;
       w->k  = k;
@@ -921,10 +1498,9 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
           if (found.tag == TermTag::Rel) {
             rel = found.rel;
           } else {
-            // Not in RelEnv: virtual extension point (Stage 0B).
+            // Not in RelEnv: try core built-ins, then virtual extension point.
             // Deep-resolve BVars → Vars, then walk Vars through the
-            // substitution, so handleUnknownRelation receives fully-grounded
-            // terms (no compile-time BVar indices survive into the handler).
+            // substitution, so handlers receive fully-grounded terms.
             Term* resolved = static_cast<Term*>(
                 a.alloc(g->call.arg_count * sizeof(Term), alignof(Term)));
             if (!resolved) return StepResult::OOM;
@@ -932,6 +1508,14 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
               Term t = deep_resolve_bvar(a, g->call.args[ri], st.env);
               resolved[ri] = walk_deep(a, t, st.subst, rel_env);
             }
+            // Try core built-ins (non-virtual, cannot be overridden).
+            {
+              StepResult sr = handleKnownRelation(
+                  rel_t.sym, resolved, g->call.arg_count, st,
+                  a, q, k, w, yielded, rel_env);
+              if (sr != StepResult::NotHandled) return sr;
+            }
+            // Fall through to virtual extension point (Stage 0B).
             StepResult sr = handleUnknownRelation(
                 rel_t.sym, resolved, g->call.arg_count, st);
             if (sr == StepResult::NoYield) return StepResult::NoYield;
@@ -984,7 +1568,7 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       // caller's scope to resolve against the wrong env chain.
       const Kont* wrapped_k = kont_restore_env(a, st.env, k);
       if (!wrapped_k) return StepResult::OOM;
-      State st2{ s, st.diseqs, body_env, st.counter, st.client_offset };
+      State st2{ s, st.constraints, body_env, st.counter, st.client_offset };
       w->g  = rel->body;
       w->st = st2;
       w->k  = wrapped_k;
@@ -1015,13 +1599,15 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       }
 
       // Constraint not yet violated; record it for future equality checks.
-      Diseq* d = a.make<Diseq>();
-      if (!d) return StepResult::OOM;
-      d->u    = u;
-      d->v    = v;
-      d->next = st.diseqs;
+      Constraint* c = a.make<Constraint>();
+      if (!c) return StepResult::OOM;
+      c->u      = u;
+      c->v      = v;
+      c->offset = 0;
+      c->rel    = ConstraintRel::Eq;
+      c->next   = st.constraints;
 
-      State st2{ st.subst, d, st.env, st.counter, st.client_offset };
+      State st2{ st.subst, c, st.env, st.counter, st.client_offset };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
@@ -1065,6 +1651,7 @@ inline void Evaluator::runN(int n, const Goal* query_goal, Term query_var,
 
   // Initialize state. client_offset reflects the current region offset
   // (typically 0 for a fresh evaluator, or whatever was allocated before).
+  // Second nullptr is for const Constraint* constraints (empty at start).
   State st0{ nullptr, nullptr, nullptr, vars_used, client_region_.offset };
 
   Work* w0 = a.make<Work>();
@@ -1096,6 +1683,8 @@ template<class OnAnswer>
 inline void runN(Arena& a, int n, const Goal* query_goal, Term query_var,
                  std::uint32_t vars_used, const OutcomeSyms& syms,
                  OnAnswer&& on_answer) {
+  // Uses 2-arg Evaluator constructor (no intern → arithmetic unavailable).
+  // security_test.cpp calls this form and cannot be modified.
   Evaluator eval(&a, &syms);
   eval.runN(n, query_goal, query_var, vars_used, RelEnv{},
             std::forward<OnAnswer>(on_answer));

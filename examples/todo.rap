@@ -1,0 +1,81 @@
+; examples/todo.rap — interactive to-do list manager
+; Demonstrates: handle_input dispatching on commands, agenda as
+; persistent state, RAP's uniform treatment of control and data.
+;
+; Commands (type at prompt):
+;   add <item>   — add an item to the list
+;   done <item>  — remove an item from the list
+;   list         — print all pending items
+;   quit         — exit (close stdin)
+;
+; Run with: ./raprunner examples/todo.rap
+
+; Parse a two-word command: (cmd arg)
+(defrel (two-word-cmdo input cmd arg)
+  (== input (cmd . (arg . ()))))
+
+; Parse a one-word command: (cmd)
+(defrel (one-word-cmdo input cmd)
+  (== input (cmd . ())))
+
+; Collect all todo items currently in the agenda
+(defrel (collect-todoso agenda items)
+  (disj
+    (conj (== agenda ()) (== items ()))
+    (fresh (item rest tail)
+      (conj
+        (== agenda ((todo item) . rest))
+        (call collect-todoso rest tail)
+        (== items (item . tail))))
+    (fresh (other rest)
+      (conj
+        (== agenda (other . rest))
+        (=/= other (todo _))
+        (call collect-todoso rest items)))))
+
+; Build output ops for each item in a list
+(defrel (output-listo items ops-in ops-out)
+  (disj
+    (conj (== items ()) (== ops-in ops-out))
+    (fresh (item rest ops-mid)
+      (conj
+        (== items (item . rest))
+        (call cons-ops (output item) ops-in ops-mid)
+        (call output-listo rest ops-mid ops-out)))))
+
+(defrel (main args ops)
+  (call cons-ops (output todo-list-ready) (no-ops) ops))
+
+(defrel (handle_input agenda fd input ops)
+  (disj
+    ; add <item>: enqueue a new todo entry
+    (fresh (item ops0)
+      (conj
+        (call two-word-cmdo input add item)
+        (call cons-ops (add (todo item)) (no-ops) ops0)
+        (call cons-ops (output (added item)) ops0 ops)))
+
+    ; done <item>: find and remove the todo entry
+    (fresh (item ops0)
+      (conj
+        (call two-word-cmdo input done item)
+        (call membero (todo item) agenda)
+        (call cons-ops (remove (todo item)) (no-ops) ops0)
+        (call cons-ops (output (removed item)) ops0 ops)))
+
+    ; list: output all current todo items
+    (fresh (items ops0)
+      (conj
+        (call one-word-cmdo input list)
+        (call collect-todoso agenda items)
+        (call output-listo items (no-ops) ops0)
+        (== ops ops0)))
+
+    ; unknown command: say so
+    (fresh (cmd)
+      (conj
+        (=/= input (add . _))
+        (=/= input (done . _))
+        (=/= input (list . ()))
+        (call cons-ops (output unknown-command) (no-ops) ops)))))
+

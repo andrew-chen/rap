@@ -1,0 +1,56 @@
+; examples/celsius.rap — temperature converter (Celsius <-> Fahrenheit)
+; Demonstrates: Probe-based arithmetic approximation, bidirectional
+; relations, menu-driven handle_input dispatch.
+;
+; Note: this implementation uses a table of pre-computed conversions
+; rather than arithmetic relations (which are not yet in stdlib).
+; It demonstrates the RAP pattern cleanly without requiring CLP(FD).
+;
+; Commands:
+;   c <N>   — convert N degrees Celsius to Fahrenheit (N: freezing, body, boiling)
+;   f <N>   — convert N degrees Fahrenheit to Celsius
+;   help    — show available conversions
+;
+; Run with: ./raprunner examples/celsius.rap
+
+; Conversion table: (celsius fahrenheit) pairs
+(defrel (tempo c f)
+  (disj
+    (conj (== c freezing)  (== f 32))
+    (conj (== c body)      (== f 98))
+    (conj (== c boiling)   (== f 212))
+    (conj (== c cold)      (== f 39))
+    (conj (== c warm)      (== f 77))
+    (conj (== c hot)       (== f 104))))
+
+(defrel (main args ops)
+  (call cons-ops (output temperature-converter-ready) (no-ops) ops))
+
+(defrel (handle_input agenda fd input ops)
+  (disj
+    ; c <name>: Celsius name to Fahrenheit value
+    (fresh (name f ops0)
+      (conj
+        (== input (c name))
+        (call tempo name f)
+        (call cons-ops (output (celsius name is-fahrenheit f)) (no-ops) ops)))
+
+    ; f <value>: Fahrenheit value to Celsius name (runs tempo backward)
+    (fresh (val c ops0)
+      (conj
+        (== input (f val))
+        (call tempo c val)
+        (call cons-ops (output (fahrenheit val is-celsius c)) (no-ops) ops)))
+
+    ; help
+    (conj
+      (== input (help))
+      (call cons-ops (output (commands c-name f-value help)) (no-ops) ops))
+
+    ; unknown
+    (conj
+      (=/= input (c . _))
+      (=/= input (f . _))
+      (=/= input (help))
+      (call cons-ops (output unknown-command) (no-ops) ops))))
+

@@ -30,3 +30,7 @@ struct RelEnv;         // Stage 0A
 struct RelEnvEntry;    // Stage 0A
 struct GlobalBind;
 struct BoundBind;
+
+// STAGE_ARITH: extended constraint store
+enum class ConstraintRel : std::uint8_t;
+struct Constraint;

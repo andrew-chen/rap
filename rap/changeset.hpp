@@ -3,35 +3,7 @@
 #include "../core/mktypes.hpp"
 #include "../core/core.hpp"
 
-// ============================================================================
-// deep_copy_term: deep-copies a term into dest_arena, rewriting all interior
-// PairNode* pointers to point into dest_arena.
-// Sym pointers are shared (interned symbols are stable — no copy needed).
-// RelNode bodies are NOT copied (they live in parse-time arena, stable).
-// ============================================================================
-inline Term deep_copy_term(Arena& dest, Term t) {
-    switch (t.tag) {
-        case TermTag::Nil:
-        case TermTag::Int:
-        case TermTag::Sym:
-        case TermTag::Var:
-        case TermTag::BVar:
-        case TermTag::Rel:
-            return t;  // no heap pointers to rewrite
-
-        case TermTag::Pair: {
-            if (!t.pair) return t;
-            PairNode* p = dest.make<PairNode>();
-            if (!p) return Term::nil();  // OOM
-            p->car = deep_copy_term(dest, t.pair->car);
-            p->cdr = deep_copy_term(dest, t.pair->cdr);
-            return Term::make_pair(p);
-        }
-
-        default:
-            return Term::nil();
-    }
-}
+// deep_copy_term is defined in core/core.hpp (included above).
 
 // ============================================================================
 // Op types

@@ -1,0 +1,10 @@
+; examples/hello.rap — hello world
+; Demonstrates: main producing output, no input handling needed.
+; Run with: echo "" | ./raprunner examples/hello.rap
+; or:       ./raprunner examples/hello.rap < /dev/null
+
+(defrel (main args ops)
+  (call cons-ops (output hello-world) (no-ops) ops))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
