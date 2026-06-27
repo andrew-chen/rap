@@ -21,6 +21,7 @@
 #include <cstring>
 #include <chrono>
 #include <string>
+#include <vector>
 #include <iostream>
 #include <unistd.h>
 
@@ -136,6 +137,28 @@ static void dispatch(const std::string& src,
 
 
 // ============================================================================
+// load_file: silently load a .rap file into the session state
+// ============================================================================
+static bool load_file(const char* path,
+                      Arena& intern_arena, Arena& query_arena,
+                      Intern& sess_intern, OutcomeSyms& sess_syms,
+                      RelEnv& sess_rel_env, Evaluator& eval) {
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    std::fseek(f, 0, SEEK_END);
+    long fsize = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (fsize <= 0) { std::fclose(f); return false; }
+    std::string content(static_cast<std::size_t>(fsize), '\0');
+    std::fread(&content[0], 1, static_cast<std::size_t>(fsize), f);
+    std::fclose(f);
+    dispatch(content, intern_arena, query_arena,
+             sess_intern, sess_syms, sess_rel_env, eval, false, false);
+    return true;
+}
+
+
+// ============================================================================
 // main
 // ============================================================================
 int main(int argc, char** argv) {
@@ -171,6 +194,25 @@ int main(int argc, char** argv) {
     RelEnv  rel_env{};
     // Evaluator uses query_arena for working storage; syms for probe outcomes.
     Evaluator eval(&query_arena, &intern_arena, &intern, &syms);
+
+    // Load stdlib before the interactive prompt.
+    {
+        const char* env_path = std::getenv("RAP_STDLIB");
+        std::vector<std::string> candidates;
+        if (env_path) candidates.push_back(env_path);
+        candidates.push_back("stdlib/core.rap");
+        bool found = false;
+        for (const auto& path : candidates) {
+            if (load_file(path.c_str(), intern_arena, query_arena,
+                          intern, syms, rel_env, eval)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            std::fprintf(stderr, "warning: stdlib/core.rap not found; "
+                                 "standard relations unavailable\n");
+    }
 
     if (interactive) {
         std::printf("rap \xe2\x80\x94 Relational Agenda Programming\n");

@@ -34,7 +34,7 @@
 
 // prog_arena: long-lived. Holds all defrel Goal trees loaded from program file.
 // Never reset.
-alignas(64) static std::uint8_t prog_buf[128 * 1024];
+alignas(64) static std::uint8_t prog_buf[256 * 1024];
 
 // intern_arena: long-lived. Holds interned symbols across the session.
 // Never reset.
@@ -47,9 +47,9 @@ alignas(64) static std::uint8_t eval_buf[EVAL_ARENA_SIZE];
 // Never reset.
 alignas(64) static std::uint8_t rap_buf[MAX_CHANGESET_ARENA + 1024];
 
-// wrap_arena: holds handle_input wrapper RelNodes.
-// Reset when agenda drains to empty (all wrappers have been executed).
-alignas(64) static std::uint8_t wrap_buf[32 * 1024];
+// wrap_arena: holds handle_input wrapper RelNodes and char-list PairNodes.
+// Reset when no Rel items remain in the agenda.
+alignas(64) static std::uint8_t wrap_buf[64 * 1024];
 
 
 // ============================================================================
@@ -65,7 +65,10 @@ static void apply_changeset(const ChangeSet& cs,
                 agenda.enqueue(op.query_term);
                 break;
             case OpTag::Remove:
-                agenda.remove(op.query_id);
+                if (op.query_term.tag == TermTag::Int)
+                    agenda.remove(static_cast<std::uint32_t>(op.query_term.value));
+                else
+                    agenda.remove_by_term(op.query_term);
                 break;
             case OpTag::Output: {
                 // Deep-copy into intern_arena so the term survives eval_arena reset.
@@ -80,7 +83,7 @@ static void apply_changeset(const ChangeSet& cs,
 
 
 // ============================================================================
-// run_one: dequeue and execute one agenda entry
+// run_one: dequeue and execute one Rel agenda entry (skip data items)
 // ============================================================================
 static void run_one(RapEvaluator& evaluator,
                     Agenda&       agenda,
@@ -89,7 +92,7 @@ static void run_one(RapEvaluator& evaluator,
                     Arena&        eval_arena,
                     Arena&        intern_arena) {
     QueryEntry entry;
-    if (!agenda.dequeue(entry)) return;
+    if (!agenda.dequeue_rel(entry)) return;
 
     // Build agenda list term from remaining entries.
     spine.reset();
@@ -191,19 +194,26 @@ static Term build_args_term(Arena& arena, Intern& intern,
 
 
 // ============================================================================
-// read_line_fd: read one line from fd (blocking, char by char).
-// Returns true if a line was read, false on EOF or error.
+// build_char_list: convert raw bytes into a char-list term
+//
+// Each byte becomes a single-character symbol (e.g., 'a', '\n').
+// PairNodes are allocated in pair_arena; SymEntries in sym_arena.
+// Built back-to-front so the final result is in input order.
 // ============================================================================
-static bool read_line_fd(int fd, std::string& line) {
-    line.clear();
-    char c;
-    while (true) {
-        ssize_t n = read(fd, &c, 1);
-        if (n == 0) return false;   // EOF
-        if (n < 0) return false;    // error
-        if (c == '\n') return true;
-        line += c;
+static Term build_char_list(Arena& pair_arena, Arena& sym_arena, Intern& intern,
+                             const char* buf, ssize_t len) {
+    Term result = Term::nil();
+    for (ssize_t i = len - 1; i >= 0; --i) {
+        char cbuf[2] = { buf[i], '\0' };
+        const SymEntry* s = intern_cstr(sym_arena, intern, cbuf);
+        if (!s) return result;
+        PairNode* p = pair_arena.make<PairNode>();
+        if (!p) return result;
+        p->car = Term::symbol(s);
+        p->cdr = result;
+        result = Term::make_pair(p);
     }
+    return result;
 }
 
 
@@ -224,17 +234,10 @@ static void enqueue_handle_input(Arena&      wrap_arena,
                                  Intern&     sess_intern,
                                  Term        handle_input_rel,
                                  int         fd,
-                                 const std::string& line) {
+                                 Term        input_term) {
     // Build agenda snapshot in spine_arena.
     spine.reset();
     Term agenda_snap = agenda.as_term(spine.get());
-
-    // Intern the input line as a symbol.
-    const SymEntry* line_sym = intern_cstr(intern_arena, sess_intern, line.c_str());
-    if (!line_sym) {
-        std::fprintf(stderr, "raprunner: OOM interning input line\n");
-        return;
-    }
 
     // Allocate the args array for the inner call in wrap_arena.
     Term* inner_args = static_cast<Term*>(
@@ -243,10 +246,10 @@ static void enqueue_handle_input(Arena&      wrap_arena,
         std::fprintf(stderr, "raprunner: OOM building handle_input args\n");
         return;
     }
-    inner_args[0] = agenda_snap;                // agenda snapshot
-    inner_args[1] = Term::integer(fd);          // fd identifier
-    inner_args[2] = Term::symbol(line_sym);     // input line as symbol
-    inner_args[3] = Term::bvar(0);              // ops = bvar(0) (wrapper's param)
+    inner_args[0] = agenda_snap;        // agenda snapshot
+    inner_args[1] = Term::integer(fd);  // fd identifier
+    inner_args[2] = input_term;         // char-list or nil (EOF)
+    inner_args[3] = Term::bvar(0);      // ops = bvar(0) (wrapper's param)
 
     // Build the inner call goal: (call handle_input agenda fd input bvar(0))
     Goal* body = wrap_arena.make<Goal>();
@@ -271,7 +274,9 @@ static void enqueue_handle_input(Arena&      wrap_arena,
         std::fprintf(stderr, "raprunner: agenda OOM enqueuing handle_input\n");
     }
 
-    (void)rel_env;  // rel_cache on handle_input's SymEntry provides runtime lookup
+    (void)rel_env;
+    (void)intern_arena;
+    (void)sess_intern;
 }
 
 
@@ -321,9 +326,6 @@ static bool load_program(const char*  path,
     }
 
     // Merge new defrels into the session rel_env.
-    // Since prog_arena is the arena used for parse_query, the bodies are already
-    // in prog_arena.  deep_copy_goal copies within prog_arena to get a clean copy
-    // separate from parse temporaries (sexp tree, lexer output).
     for (const RelEnvEntry* e = pq.rel_env.head; e; e = e->next) {
         const Goal* body_copy = deep_copy_goal(prog_arena, e->rel_term.rel->body);
         RelNode* rn = prog_arena.make<RelNode>();
@@ -337,6 +339,29 @@ static bool load_program(const char*  path,
     }
 
     return true;
+}
+
+
+// ============================================================================
+// load_stdlib: load stdlib/core.rap from $RAP_STDLIB or relative to cwd
+// ============================================================================
+static void load_stdlib(Arena& prog_arena, Intern& intern, RelEnv& rel_env) {
+    const char* env_path = std::getenv("RAP_STDLIB");
+    std::vector<std::string> candidates;
+    if (env_path) candidates.push_back(env_path);
+    candidates.push_back("stdlib/core.rap");
+
+    for (const auto& path : candidates) {
+        FILE* f = std::fopen(path.c_str(), "r");
+        if (!f) continue;
+        std::fclose(f);
+        if (!load_program(path.c_str(), prog_arena, intern, rel_env))
+            std::fprintf(stderr, "raprunner: warning: failed to load stdlib '%s'\n",
+                         path.c_str());
+        return;
+    }
+    std::fprintf(stderr, "raprunner: warning: stdlib/core.rap not found; "
+                         "standard relations unavailable\n");
 }
 
 
@@ -399,8 +424,9 @@ int main(int argc, char** argv) {
     RapEvaluator* evaluator =
         new (evaluator_buf) RapEvaluator(&eval_arena, &rap_arena, &intern, &syms);
 
-    // ---- Load program file -------------------------------------------------
+    // ---- Load stdlib then program file -------------------------------------
     RelEnv rel_env{};
+    load_stdlib(prog_arena, intern, rel_env);
     if (!load_program(program_file, prog_arena, intern, rel_env)) return 1;
 
     // ---- Check entry points ------------------------------------------------
@@ -452,14 +478,13 @@ int main(int argc, char** argv) {
     for (int fd : extra_fds) watched_fds.push_back(fd);
 
     while (true) {
-        // Run agenda until empty.
-        while (!agenda.empty()) {
+        // Run agenda until no Rel items remain (data items may stay).
+        while (agenda.has_rel()) {
             run_one(*evaluator, agenda, spine, rel_env,
                     eval_arena, intern_arena);
         }
 
-        // Agenda is empty. Reset wrap_arena — all previously enqueued
-        // handle_input wrappers have been executed.
+        // No Rel items remain. Reset wrap_arena — all wrappers have executed.
         wrap_arena.reset();
 
         // Exit if no fds remain.
@@ -489,18 +514,22 @@ int main(int argc, char** argv) {
             short revents = pfds[i].revents;
 
             if (revents & POLLIN) {
-                // POLLIN may be set alongside POLLHUP (write end of pipe closed
-                // while data remains).  Try to read: only remove the fd if read
-                // actually returns EOF (0 bytes), not just because POLLHUP is set.
-                std::string line;
-                bool ok = read_line_fd(fd, line);
-                if (!ok) {
-                    fds_to_remove.push_back(fd);
-                } else {
+                char block[4096];
+                ssize_t n = read(fd, block, sizeof(block));
+                if (n == 0) {
+                    // EOF: send empty list as input, then drop fd.
                     enqueue_handle_input(wrap_arena, agenda, spine, rel_env,
                                         intern_arena, intern,
-                                        handle_input_rel, fd, line);
+                                        handle_input_rel, fd, Term::nil());
+                    fds_to_remove.push_back(fd);
+                } else if (n > 0) {
+                    Term input_term = build_char_list(wrap_arena, intern_arena,
+                                                     intern, block, n);
+                    enqueue_handle_input(wrap_arena, agenda, spine, rel_env,
+                                        intern_arena, intern,
+                                        handle_input_rel, fd, input_term);
                 }
+                // n < 0: read error — ignore for now (poll will report POLLERR next)
             } else if (revents & (POLLHUP | POLLERR)) {
                 // No data available but fd hung up or errored — remove it.
                 fds_to_remove.push_back(fd);

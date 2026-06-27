@@ -193,10 +193,9 @@ inline StepResult RapEvaluator::handle_cons_ops(
       op.query_term = deep_copy_term(cs->arena, op_arg);
       push_this_op  = true;
     } else if (sym_lit_eq(op_head.sym, "remove")) {
-      if (op_arg.tag != TermTag::Int) return StepResult::NoYield;
-      op.tag      = OpTag::Remove;
-      op.query_id = static_cast<std::uint32_t>(op_arg.value);
-      push_this_op = true;
+      op.tag        = OpTag::Remove;
+      op.query_term = deep_copy_term(cs->arena, op_arg);
+      push_this_op  = true;
     } else if (sym_lit_eq(op_head.sym, "output")) {
       op.tag         = OpTag::Output;
       op.output_term = deep_copy_term(cs->arena, op_arg);

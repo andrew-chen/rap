@@ -50,6 +50,12 @@ test_arith: core/test_arith.cpp core/sexp_parser.hpp core/core.hpp \
             core/intern.hpp core/arena.hpp core/mktypes.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+examples: raprunner repl
+	echo "" | ./raprunner examples/hello.rap
+	echo "hello world" | ./raprunner examples/echo.rap
+	echo "" | ./raprunner examples/wc.rap
+	@echo "Examples smoke test passed."
+
 clean:
 	rm -f parse_run.o parse_run rap/test_rap.o test_rap security/security_test \
 	      core_test_extension rap_test_extension test_stage2 repl raprunner \
@@ -68,4 +74,4 @@ test: all
 	./test_arith
 	@echo "All tests complete."
 
-.PHONY: all clean run test
+.PHONY: all clean run test examples

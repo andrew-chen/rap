@@ -1,0 +1,140 @@
+; stdlib/core.rap — standard library for RAP
+; Loaded automatically by raprunner and the REPL.
+
+;; Arithmetic convenience wrappers
+
+; (addo a b c) — a + b = c
+(defrel (addo a b c)
+  (addsubo a b c))
+
+; (subo a b c) — a - b = c  (i.e. a = c + b)
+(defrel (subo a b c)
+  (addsubo c b a))
+
+; (mulo a b c) — a * b = c
+(defrel (mulo a b c)
+  (multaddiso a b 0 c))
+
+; (divo a b q r) — a = b*q + r, with 0 <= r < b
+(defrel (divo a b q r)
+  (multaddiso q b r a)
+  (leqo 0 r)
+  (lto r b))
+
+; (modo a b r) — a mod b = r
+(defrel (modo a b r)
+  (fresh (q)
+    (divo a b q r)))
+
+;; Numeric predicates
+
+; (zeroo n) — n == 0
+(defrel (zeroo n)
+  (eqo n 0))
+
+; (poso n) — n > 0
+(defrel (poso n)
+  (gto n 0))
+
+; (nego n) — n < 0
+(defrel (nego n)
+  (lto n 0))
+
+;; Character classification
+
+; (digitcharo c) — c is a digit character (0-9, ASCII 48-57)
+(defrel (digitcharo c)
+  (fresh (n)
+    (charo c n)
+    (leqo 48 n)
+    (leqo n 57)))
+
+; (alphacharo c) — c is an alphabetic character (a-z or A-Z)
+(defrel (alphacharo c)
+  (fresh (n)
+    (charo c n)
+    (disj
+      (conj (leqo 65 n) (leqo n 90))
+      (conj (leqo 97 n) (leqo n 122)))))
+
+; (lowercaseo c) — c is a lowercase letter (a-z, ASCII 97-122)
+(defrel (lowercaseo c)
+  (fresh (n)
+    (charo c n)
+    (leqo 97 n)
+    (leqo n 122)))
+
+; (uppercaseo c) — c is an uppercase letter (A-Z, ASCII 65-90)
+(defrel (uppercaseo c)
+  (fresh (n)
+    (charo c n)
+    (leqo 65 n)
+    (leqo n 90)))
+
+; (spacecharo c) — c is a whitespace character (space=32, tab=9, newline=10)
+(defrel (spacecharo c)
+  (disj
+    (charo c 32)
+    (charo c 9)
+    (charo c 10)))
+
+; (printablecharo c) — c is a printable ASCII character (32-126)
+(defrel (printablecharo c)
+  (fresh (n)
+    (charo c n)
+    (leqo 32 n)
+    (leqo n 126)))
+
+;; List utilities
+
+; (lengtho lst n) — lst has length n
+(defrel (lengtho lst n)
+  (disj
+    (conj (== lst ()) (eqo n 0))
+    (fresh (h t n1)
+      (conj
+        (== lst (h . t))
+        (addo n1 1 n)
+        (lengtho t n1)))))
+
+; (membero x lst) — x is a member of lst
+(defrel (membero x lst)
+  (disj
+    (fresh (rest) (== lst (x . rest)))
+    (fresh (h rest)
+      (conj
+        (== lst (h . rest))
+        (membero x rest)))))
+
+; (appendo l r out) — l ++ r = out
+(defrel (appendo l r out)
+  (disj
+    (conj (== l ()) (== out r))
+    (fresh (h t res)
+      (conj
+        (== l (h . t))
+        (== out (h . res))
+        (appendo t r res)))))
+
+; (reverseo lst rev) — rev is the reverse of lst
+(defrel (reverseo lst rev)
+  (reverseo-acc lst () rev))
+
+(defrel (reverseo-acc lst acc rev)
+  (disj
+    (conj (== lst ()) (== acc rev))
+    (fresh (h t)
+      (conj
+        (== lst (h . t))
+        (reverseo-acc t (h . acc) rev)))))
+
+; (takeo n lst out) — out is the first n elements of lst
+(defrel (takeo n lst out)
+  (disj
+    (conj (eqo n 0) (== out ()))
+    (fresh (h t out-rest n1)
+      (conj
+        (== lst (h . t))
+        (== out (h . out-rest))
+        (addo n1 1 n)
+        (takeo n1 t out-rest)))))

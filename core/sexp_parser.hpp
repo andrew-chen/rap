@@ -794,11 +794,23 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
         }
       }
 
-      // Compile body with empty genv (defrel is top-level; q not yet defined)
+      // Compile body with empty genv (defrel is top-level; q not yet defined).
+      // Multi-goal bodies are chained with conj (same as fresh bodies).
       const Goal* body = compile_goal(a, nullptr, rel_benv, dc->car);
       if (!body) {
         std::printf("[parse_query] ERROR: 'defrel' body failed to compile\n");
         return out;
+      }
+      dc = dc->cdr;
+      while (dc && dc->car) {
+        const Goal* g2 = compile_goal(a, nullptr, rel_benv, dc->car);
+        if (!g2) {
+          std::printf("[parse_query] ERROR: 'defrel' body goal failed to compile\n");
+          return out;
+        }
+        body = make_conj(a, body, g2);
+        if (!body) return out;
+        dc = dc->cdr;
       }
 
       RelNode* rn = a.make<RelNode>();
@@ -1015,6 +1027,18 @@ inline ParsedQuery parse_query(Arena& a, const char* src,
         std::printf("[parse_query] ERROR: 'defrel' body failed to compile\n");
         sess_intern = out.intern;
         return out;
+      }
+      dc = dc->cdr;
+      while (dc && dc->car) {
+        const Goal* g2 = compile_goal(a, nullptr, rel_benv, dc->car);
+        if (!g2) {
+          std::printf("[parse_query] ERROR: 'defrel' body goal failed to compile\n");
+          sess_intern = out.intern;
+          return out;
+        }
+        body = make_conj(a, body, g2);
+        if (!body) { sess_intern = out.intern; return out; }
+        dc = dc->cdr;
       }
 
       RelNode* rn = a.make<RelNode>();

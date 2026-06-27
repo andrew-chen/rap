@@ -137,6 +137,66 @@ struct Agenda {
         return false;  // not found
     }
 
+    // Remove by structural value (for non-Int terms like (wc-state 0 0 0 0)).
+    static bool terms_equal(Term a, Term b) {
+        if (a.tag != b.tag) return false;
+        switch (a.tag) {
+            case TermTag::Int:  return a.value == b.value;
+            case TermTag::Nil:  return true;
+            case TermTag::Sym:  return a.sym == b.sym;
+            case TermTag::Var:  return a.id == b.id;
+            case TermTag::BVar: return a.id == b.id;
+            case TermTag::Rel:  return a.rel == b.rel;
+            case TermTag::Pair:
+                if (!a.pair || !b.pair) return !a.pair && !b.pair;
+                return terms_equal(a.pair->car, b.pair->car) &&
+                       terms_equal(a.pair->cdr, b.pair->cdr);
+            default: return false;
+        }
+    }
+
+    bool remove_by_term(Term t) {
+        std::uint32_t pos = tail;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(buf + pos);
+            if (terms_equal(e->query_term, t))
+                return remove(e->id);
+            pos += e->byte_size;
+        }
+        return false;
+    }
+
+    // Returns true if any Rel-tagged item is present (data items don't count).
+    bool has_rel() const {
+        std::uint32_t pos = tail;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(buf + pos);
+            if (e->query_term.tag == TermTag::Rel) return true;
+            pos += e->byte_size;
+        }
+        return false;
+    }
+
+    // Dequeue the first Rel-tagged item, skipping data items.
+    bool dequeue_rel(QueryEntry& out) {
+        if (count == 0) return false;
+        std::uint32_t pos = tail;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(buf + pos);
+            if (e->query_term.tag == TermTag::Rel) {
+                std::uint32_t saved_id   = e->id;
+                Term          saved_term = e->query_term;
+                remove(saved_id);
+                out.id         = saved_id;
+                out.byte_size  = 0;
+                out.query_term = saved_term;
+                return true;
+            }
+            pos += e->byte_size;
+        }
+        return false;
+    }
+
     // Build the agenda as a linked-list term for passing to the next query.
     // Uses spine_arena for the Pair nodes (reset after query starts).
     Term as_term(Arena& spine_arena) const {
