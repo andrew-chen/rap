@@ -45,7 +45,7 @@ alignas(64) static std::uint8_t eval_buf[EVAL_ARENA_SIZE];
 
 // rap_arena: permanent. Holds RapEvaluator's SymEntries and client region.
 // Never reset.
-alignas(64) static std::uint8_t rap_buf[MAX_CHANGESET_ARENA + 1024];
+alignas(64) static std::uint8_t rap_buf[MAX_CHANGESET_ARENA + 32 * 1024];
 
 // wrap_arena: holds handle_input wrapper RelNodes and char-list PairNodes.
 // Reset when no Rel items remain in the agenda.
@@ -67,8 +67,6 @@ static void apply_changeset(const ChangeSet& cs,
             case OpTag::Remove:
                 if (op.query_term.tag == TermTag::Int)
                     agenda.remove(static_cast<std::uint32_t>(op.query_term.value));
-                else
-                    agenda.remove_by_term(op.query_term);
                 break;
             case OpTag::Output: {
                 // Deep-copy into intern_arena so the term survives eval_arena reset.
@@ -92,7 +90,7 @@ static void run_one(RapEvaluator& evaluator,
                     Arena&        eval_arena,
                     Arena&        intern_arena) {
     QueryEntry entry;
-    if (!agenda.dequeue_rel(entry)) return;
+    if (!agenda.dequeue_runnable(entry)) return;
 
     // Build agenda list term from remaining entries.
     spine.reset();
@@ -249,9 +247,9 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     inner_args[0] = agenda_snap;        // agenda snapshot
     inner_args[1] = Term::integer(fd);  // fd identifier
     inner_args[2] = input_term;         // char-list or nil (EOF)
-    inner_args[3] = Term::bvar(0);      // ops = bvar(0) (wrapper's param)
+    inner_args[3] = Term::bvar(1);      // ops = bvar(1) (wrapper's 2nd param, unbound)
 
-    // Build the inner call goal: (call handle_input agenda fd input bvar(0))
+    // Build the inner call goal: (call handle_input agenda fd input bvar(1))
     Goal* body = wrap_arena.make<Goal>();
     if (!body) {
         std::fprintf(stderr, "raprunner: OOM building wrapper body\n");
@@ -260,14 +258,18 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     body->tag  = GoalTag::Call;
     body->call = GoalCall{handle_input_rel, inner_args, 4};
 
-    // Build the wrapper RelNode (1 param: ops).
+    // Build the wrapper RelNode (2 params: agenda bvar(0), ops bvar(1)).
+    // run_one calls it as (wrapper agenda_term Var(1)) where Var(1) is unbound,
+    // so ops stays unbound for handle_input to bind via cons-ops.
     RelNode* wrapper = wrap_arena.make<RelNode>();
     if (!wrapper) {
         std::fprintf(stderr, "raprunner: OOM building wrapper RelNode\n");
         return;
     }
-    wrapper->param_count = 1;
-    wrapper->body        = body;
+    wrapper->param_count     = 2;
+    wrapper->body            = body;
+    wrapper->captured_count  = 0;
+    wrapper->captured_values = nullptr;
 
     Term wrapper_term = Term::relation(wrapper);
     if (!agenda.enqueue(wrapper_term)) {
@@ -333,8 +335,10 @@ static bool load_program(const char*  path,
             std::fprintf(stderr, "raprunner: OOM in prog_arena\n");
             return false;
         }
-        rn->param_count = e->rel_term.rel->param_count;
-        rn->body        = body_copy;
+        rn->param_count     = e->rel_term.rel->param_count;
+        rn->body            = body_copy;
+        rn->captured_count  = 0;
+        rn->captured_values = nullptr;
         rel_env.define(prog_arena, e->name, Term::relation(rn));
     }
 
@@ -479,7 +483,7 @@ int main(int argc, char** argv) {
 
     while (true) {
         // Run agenda until no Rel items remain (data items may stay).
-        while (agenda.has_rel()) {
+        while (agenda.has_runnable()) {
             run_one(*evaluator, agenda, spine, rel_env,
                     eval_arena, intern_arena);
         }

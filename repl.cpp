@@ -57,8 +57,10 @@ static void merge_rel_env(Arena& intern_arena, Intern& /*sess_intern*/,
             std::printf("error: out of memory — repl stopping\n");
             std::exit(1);
         }
-        node->param_count = e->rel_term.rel->param_count;
-        node->body        = body_copy;
+        node->param_count     = e->rel_term.rel->param_count;
+        node->body            = body_copy;
+        node->captured_count  = 0;
+        node->captured_values = nullptr;
 
         Term stable_rel = Term::relation(node);
         sess_rel_env.define(intern_arena, e->name, stable_rel);

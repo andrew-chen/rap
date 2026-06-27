@@ -193,9 +193,12 @@ inline StepResult RapEvaluator::handle_cons_ops(
       op.query_term = deep_copy_term(cs->arena, op_arg);
       push_this_op  = true;
     } else if (sym_lit_eq(op_head.sym, "remove")) {
-      op.tag        = OpTag::Remove;
-      op.query_term = deep_copy_term(cs->arena, op_arg);
-      push_this_op  = true;
+      if (op_arg.tag != TermTag::Int) { /* non-Int remove: ignore */ }
+      else {
+        op.tag        = OpTag::Remove;
+        op.query_term = op_arg;  // Int term: no heap pointers, no copy needed
+        push_this_op  = true;
+      }
     } else if (sym_lit_eq(op_head.sym, "output")) {
       op.tag         = OpTag::Output;
       op.output_term = deep_copy_term(cs->arena, op_arg);

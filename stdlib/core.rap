@@ -138,3 +138,56 @@
         (== out (h . out-rest))
         (addo n1 1 n)
         (takeo n1 t out-rest)))))
+
+;; Ground/bound checks
+
+; (groundo term) — term is fully ground (no unbound Var anywhere in structure)
+; Does not recurse into Rel closures.
+(defrel (groundo term)
+  (conj
+    (boundo term)
+    (disj
+      (== term ())
+      (fresh (h t)
+        (conj (== term (h . t)) (groundo h) (groundo t)))
+      (fresh (h t) (=/= term (h . t))))))
+
+;; List accessors
+
+; (caro p h) — h is the car of pair p
+(defrel (caro p h)
+  (fresh (t) (== p (h . t))))
+
+; (cdro p t) — t is the cdr of pair p
+(defrel (cdro p t)
+  (fresh (h) (== p (h . t))))
+
+; (conso h t p) — p is the pair (h . t)
+(defrel (conso h t p)
+  (== p (h . t)))
+
+;; Agenda introspection
+
+; (raw-rel template captures rel-out) — sugar over _relo.
+; Constructs a Rel from template's param_count and body, but with
+; captures snapshotted as captured_values for rel-argso introspection.
+(defrel (raw-rel template captures rel-out)
+  (_relo template captures rel-out))
+
+; (carriero value carrier) — carrier is a trivial Rel carrying value.
+; Used to place a single content value on the agenda as a Rel entry.
+(defrel (carriero value carrier)
+  (raw-rel (rel (a) (== a a)) (value) carrier))
+
+; (find-by-contento agenda pattern-list id)
+; Finds the first agenda entry (id . rel-term) whose rel-argso matches pattern-list.
+(defrel (find-by-contento agenda pattern-list id)
+  (fresh (entry rest entry-id entry-rel entry-args)
+    (== agenda (entry . rest))
+    (disj
+      (conj
+        (== entry (entry-id . entry-rel))
+        (rel-argso entry-rel entry-args)
+        (== entry-args pattern-list)
+        (== id entry-id))
+      (find-by-contento rest pattern-list id))))

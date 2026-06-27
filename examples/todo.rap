@@ -6,23 +6,21 @@
 ;   d o n e SPACE item-chars NEWLINE — mark done (removes from agenda)
 ;   l i s t NEWLINE                  — list all items
 ;
-; Items are stored as (todo <char-list>) in the agenda.
+; Items are stored as carrier Rels (via carriero) on the agenda.
 ; Run: ./raprunner examples/todo.rap
 
-; Collect all (todo item) entries from the agenda snapshot
+; Collect all (todo item) values from carrier Rel entries on the agenda
 (defrel (collect-todoso agenda items)
   (disj
     (conj (== agenda ()) (== items ()))
-    (fresh (item rest tail)
+    (fresh (entry rest entry-id entry-rel args item tail)
       (conj
-        (== agenda ((todo item) . rest))
+        (== agenda (entry . rest))
+        (== entry (entry-id . entry-rel))
+        (rel-argso entry-rel args)
+        (== args ((todo item)))
         (collect-todoso rest tail)
-        (== items (item . tail))))
-    (fresh (other rest)
-      (conj
-        (== agenda (other . rest))
-        (fresh (x) (=/= other (todo x)))
-        (collect-todoso rest items)))))
+        (== items (item . tail))))))
 
 ; Output each item as (todo item)
 (defrel (output-eacho items ops-in ops-out)
@@ -41,16 +39,17 @@
   (fresh (sp)
     (charo sp 32)
     (disj
-      (fresh (arg ops0)
+      (fresh (arg ops0 carrier)
         (conj
           (== input (a . (d . (d . (sp . arg)))))
-          (call cons-ops (add (todo arg)) (no-ops) ops0)
+          (carriero (todo arg) carrier)
+          (call cons-ops (add carrier) (no-ops) ops0)
           (call cons-ops (output (added arg)) ops0 ops)))
-      (fresh (arg ops0)
+      (fresh (arg ops0 id)
         (conj
           (== input (d . (o . (n . (e . (sp . arg))))))
-          (membero (todo arg) agenda)
-          (call cons-ops (remove (todo arg)) (no-ops) ops0)
+          (find-by-contento agenda ((todo arg)) id)
+          (call cons-ops (remove id) (no-ops) ops0)
           (call cons-ops (output (removed arg)) ops0 ops)))
       (fresh (rest items ops0)
         (conj

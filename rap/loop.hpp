@@ -154,8 +154,10 @@ struct RapLoop {
 
             RelNode* rn = intern_arena.make<RelNode>();
             if (!rn) continue;
-            rn->param_count = param_count;
-            rn->body        = body;
+            rn->param_count     = param_count;
+            rn->body            = body;
+            rn->captured_count  = 0;
+            rn->captured_values = nullptr;
 
             rel_env.define(intern_arena, rel_name, Term::relation(rn));
             any = true;
@@ -178,17 +180,17 @@ struct RapLoop {
         return agenda.enqueue(rel_term);
     }
 
-    // Run until no Rel items remain (data items may still be present).
+    // Run until the agenda is empty.
     void run_until_empty(std::uint32_t max_steps = 10000) {
-        for (std::uint32_t s = 0; s < max_steps && agenda.has_rel(); ++s)
+        for (std::uint32_t s = 0; s < max_steps && !agenda.empty(); ++s)
             run_one();
     }
 
-    // Execute one Rel query from the agenda, skipping data items.
+    // Execute one query from the agenda.
     void run_one() {
         if (!evaluator) return;
         QueryEntry entry;
-        if (!agenda.dequeue_rel(entry)) return;
+        if (!agenda.dequeue(entry)) return;
 
         // Build agenda list term from remaining entries.
         spine.reset();
@@ -260,8 +262,6 @@ private:
                 case OpTag::Remove:
                     if (op.query_term.tag == TermTag::Int)
                         agenda.remove(static_cast<std::uint32_t>(op.query_term.value));
-                    else
-                        agenda.remove_by_term(op.query_term);
                     break;
                 case OpTag::Output: {
                     // Deep-copy into intern_arena (stable, never reset) so the
