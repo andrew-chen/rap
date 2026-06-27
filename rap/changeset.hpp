@@ -17,9 +17,8 @@ enum class OpTag : std::uint8_t {
 struct Op {
     OpTag tag;
     union {
-        Term     query_term;   // Add
-        std::uint32_t query_id;     // Remove
-        Term     output_term;  // Output
+        Term query_term;   // Add: term to enqueue; Remove: Int=by-id, other=by-value
+        Term output_term;  // Output
     };
 };
 static_assert(std::is_trivially_destructible_v<Op>);

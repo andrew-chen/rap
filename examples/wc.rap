@@ -1,0 +1,63 @@
+; examples/wc.rap — character, word, and line counter
+; Demonstrates: charo, arithmetic, stateful agenda.
+; State: (wc-state chars words lines in-word) in the agenda.
+; Run: ./raprunner examples/wc.rap < somefile.txt
+
+; Count one character, updating chars/words/lines/in-word
+(defrel (count-charo c chars words lines in-word chars1 words1 lines1 in-word1)
+  (fresh (n)
+    (charo c n)
+    (addo chars 1 chars1)
+    (disj
+      (conj (eqo n 10)
+            (addo lines 1 lines1)
+            (== words1 words)
+            (== in-word1 0))
+      (conj (eqo n 32)
+            (== lines1 lines)
+            (== words1 words)
+            (== in-word1 0))
+      (conj (eqo n 9)
+            (== lines1 lines)
+            (== words1 words)
+            (== in-word1 0))
+      (conj (=/= n 10) (=/= n 32) (=/= n 9)
+            (== lines1 lines)
+            (disj
+              (conj (eqo in-word 0) (addo words 1 words1) (== in-word1 1))
+              (conj (eqo in-word 1) (== words1 words)     (== in-word1 1)))))))
+
+; Process a list of characters, updating the running state
+(defrel (count-charo-listo input chars words lines in-word chars1 words1 lines1 in-word1)
+  (disj
+    (conj (== input ())
+          (== chars1 chars)
+          (== words1 words)
+          (== lines1 lines)
+          (== in-word1 in-word))
+    (fresh (c rest c2 w2 l2 iw2)
+      (conj
+        (== input (c . rest))
+        (count-charo c chars words lines in-word c2 w2 l2 iw2)
+        (count-charo-listo rest c2 w2 l2 iw2 chars1 words1 lines1 in-word1)))))
+
+(defrel (main args ops)
+  (call cons-ops (add (wc-state 0 0 0 0)) (no-ops) ops))
+
+(defrel (handle_input agenda fd input ops)
+  (disj
+    (conj
+      (== input ())
+      (fresh (chars words lines iw)
+        (membero (wc-state chars words lines iw) agenda)
+        (call cons-ops
+          (output (chars chars words words lines lines))
+          (no-ops)
+          ops)))
+    (fresh (chars words lines iw c2 w2 l2 iw2 ops0)
+      (conj
+        (=/= input ())
+        (membero (wc-state chars words lines iw) agenda)
+        (count-charo-listo input chars words lines iw c2 w2 l2 iw2)
+        (call cons-ops (remove (wc-state chars words lines iw)) (no-ops) ops0)
+        (call cons-ops (add (wc-state c2 w2 l2 iw2)) ops0 ops)))))

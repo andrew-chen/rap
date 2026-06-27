@@ -1,4 +1,6 @@
-; examples/echo.rkt — echo server: each input line is echoed to stdout
+; examples/echo.rap — echo server
+; Each block of input is echoed back as a character list term.
+; Run: ./raprunner examples/echo.rap
 
 (defrel (main args ops)
   (call no-ops ops))

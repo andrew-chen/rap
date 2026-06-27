@@ -1,56 +1,70 @@
-; examples/celsius.rap — temperature converter (Celsius <-> Fahrenheit)
-; Demonstrates: Probe-based arithmetic approximation, bidirectional
-; relations, menu-driven handle_input dispatch.
+; examples/celsius.rap — temperature name to Fahrenheit lookup
+; Demonstrates: bidirectional relations, character-list command parsing.
 ;
-; Note: this implementation uses a table of pre-computed conversions
-; rather than arithmetic relations (which are not yet in stdlib).
-; It demonstrates the RAP pattern cleanly without requiring CLP(FD).
+; Input: character lists. Commands:
+;   c SPACE name-chars NEWLINE — look up name, output Fahrenheit value
+;   f SPACE name-chars NEWLINE — look up name, output Fahrenheit value (labeled f)
 ;
-; Commands:
-;   c <N>   — convert N degrees Celsius to Fahrenheit (N: freezing, body, boiling)
-;   f <N>   — convert N degrees Fahrenheit to Celsius
-;   help    — show available conversions
-;
-; Run with: ./raprunner examples/celsius.rap
+; Temperature names are matched as character sequences.
+; Run: ./raprunner examples/celsius.rap
 
-; Conversion table: (celsius fahrenheit) pairs
-(defrel (tempo c f)
+; Lookup table: char-list name <-> Fahrenheit integer
+(defrel (tempo name-chars f)
   (disj
-    (conj (== c freezing)  (== f 32))
-    (conj (== c body)      (== f 98))
-    (conj (== c boiling)   (== f 212))
-    (conj (== c cold)      (== f 39))
-    (conj (== c warm)      (== f 77))
-    (conj (== c hot)       (== f 104))))
+    (conj (== name-chars (f r e e z i n g)) (eqo f 32))
+    (conj (== name-chars (b o d y))         (eqo f 98))
+    (conj (== name-chars (b o i l i n g))   (eqo f 212))
+    (conj (== name-chars (c o l d))         (eqo f 39))
+    (conj (== name-chars (w a r m))         (eqo f 77))
+    (conj (== name-chars (h o t))           (eqo f 104))))
+
+; Extract leading alpha chars from a char list
+(defrel (word-alphao chars word rest)
+  (disj
+    (conj (== chars ()) (== word ()) (== rest ()))
+    (fresh (c t word-rest)
+      (conj
+        (== chars (c . t))
+        (alphacharo c)
+        (word-alphao t word-rest rest)
+        (== word (c . word-rest))))
+    (fresh (c t)
+      (conj
+        (== chars (c . t))
+        (neqo-alphao c)
+        (== word ())
+        (== rest chars)))))
+
+(defrel (neqo-alphao c)
+  (fresh (n)
+    (charo c n)
+    (disj
+      (lto n 65)
+      (conj (gto n 90) (lto n 97))
+      (gto n 122))))
 
 (defrel (main args ops)
   (call cons-ops (output temperature-converter-ready) (no-ops) ops))
 
 (defrel (handle_input agenda fd input ops)
-  (disj
-    ; c <name>: Celsius name to Fahrenheit value
-    (fresh (name f ops0)
-      (conj
-        (== input (c name))
-        (call tempo name f)
-        (call cons-ops (output (celsius name is-fahrenheit f)) (no-ops) ops)))
-
-    ; f <value>: Fahrenheit value to Celsius name (runs tempo backward)
-    (fresh (val c ops0)
-      (conj
-        (== input (f val))
-        (call tempo c val)
-        (call cons-ops (output (fahrenheit val is-celsius c)) (no-ops) ops)))
-
-    ; help
-    (conj
-      (== input (help))
-      (call cons-ops (output (commands c-name f-value help)) (no-ops) ops))
-
-    ; unknown
-    (conj
-      (=/= input (c . _))
-      (=/= input (f . _))
-      (=/= input (help))
-      (call cons-ops (output unknown-command) (no-ops) ops))))
-
+  (fresh (sp)
+    (charo sp 32)
+    (disj
+      (fresh (rest name-chars name-rest f)
+        (conj
+          (== input (c . (sp . rest)))
+          (word-alphao rest name-chars name-rest)
+          (tempo name-chars f)
+          (call cons-ops (output (celsius name-chars is-fahrenheit f)) (no-ops) ops)))
+      (fresh (rest name-chars name-rest f)
+        (conj
+          (== input (f . (sp . rest)))
+          (word-alphao rest name-chars name-rest)
+          (tempo name-chars f)
+          (call cons-ops (output (fahrenheit f is-celsius name-chars)) (no-ops) ops)))
+      (fresh (head tail)
+        (conj
+          (== input (head . tail))
+          (=/= head c)
+          (=/= head f)
+          (call cons-ops (output (usage c-name f-name)) (no-ops) ops))))))
