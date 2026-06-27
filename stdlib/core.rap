@@ -168,26 +168,15 @@
 
 ;; Agenda introspection
 
-; (raw-rel template captures rel-out) — sugar over _relo.
-; Constructs a Rel from template's param_count and body, but with
-; captures snapshotted as captured_values for rel-argso introspection.
-(defrel (raw-rel template captures rel-out)
-  (_relo template captures rel-out))
-
-; (carriero value carrier) — carrier is a trivial Rel carrying value.
-; Used to place a single content value on the agenda as a Rel entry.
-(defrel (carriero value carrier)
-  (raw-rel (rel (a) (== a a)) (value) carrier))
-
-; (find-by-contento agenda pattern-list id)
-; Finds the first agenda entry (id . rel-term) whose rel-argso matches pattern-list.
-(defrel (find-by-contento agenda pattern-list id)
+; (find-by-contento agenda pattern id)
+; Finds the first agenda entry (entry-id entry-rel entry-args) whose args
+; field matches pattern. Entries are 3-element lists: (id rel-term args).
+(defrel (find-by-contento agenda pattern id)
   (fresh (entry rest entry-id entry-rel entry-args)
     (== agenda (entry . rest))
     (disj
       (conj
-        (== entry (entry-id . entry-rel))
-        (rel-argso entry-rel entry-args)
-        (== entry-args pattern-list)
+        (== entry (entry-id entry-rel entry-args))
+        (== entry-args pattern)
         (== id entry-id))
-      (find-by-contento rest pattern-list id))))
+      (find-by-contento rest pattern id))))

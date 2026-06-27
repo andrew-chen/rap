@@ -376,10 +376,8 @@ inline Term compile_term(Arena& a, const GlobalBind* genv,
 
     RelNode* rn = a.make<RelNode>();
     if (!rn) return Term::nil();
-    rn->param_count     = param_count;
-    rn->body            = body;
-    rn->captured_count  = 0;
-    rn->captured_values = nullptr;
+    rn->param_count = param_count;
+    rn->body        = body;
     return Term::relation(rn);
   }
 
@@ -820,10 +818,8 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
         std::printf("[parse_query] ERROR: OOM allocating RelNode\n");
         return out;
       }
-      rn->param_count     = param_count;
-      rn->body            = body;
-      rn->captured_count  = 0;
-      rn->captured_values = nullptr;
+      rn->param_count = param_count;
+      rn->body        = body;
 
       out.rel_env.define(a, rel_name, Term::relation(rn));
       continue;  // parse next top-level form
@@ -1051,10 +1047,8 @@ inline ParsedQuery parse_query(Arena& a, const char* src,
         sess_intern = out.intern;
         return out;
       }
-      rn->param_count     = param_count;
-      rn->body            = body;
-      rn->captured_count  = 0;
-      rn->captured_values = nullptr;
+      rn->param_count = param_count;
+      rn->body        = body;
 
       out.rel_env.define(a, rel_name, Term::relation(rn));
       continue;

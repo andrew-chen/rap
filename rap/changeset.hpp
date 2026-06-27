@@ -15,10 +15,13 @@ enum class OpTag : std::uint8_t {
 };
 
 struct Op {
+    struct AddOp { Term rel_term; Term args; };  // declared here, used below
+
     OpTag tag;
     union {
-        Term query_term;   // Add: term to enqueue; Remove: Int=by-id, other=by-value
-        Term output_term;  // Output
+        AddOp         add;         // Add: Rel + published args
+        std::uint32_t query_id;    // Remove: id to remove
+        Term          output_term; // Output
     };
 };
 static_assert(std::is_trivially_destructible_v<Op>);

@@ -1,6 +1,6 @@
 ; examples/wc.rap — character, word, and line counter
-; Demonstrates: carrier Rels for state, find-by-contento, rel-argso.
-; State (chars words lines in-word) is carried in a carrier Rel on the agenda.
+; Demonstrates: published args for state, find-by-contento, add with args.
+; State (chars words lines in-word) is published as agenda entry args.
 ; Run: ./raprunner examples/wc.rap < somefile.txt
 
 ; Count one character, updating chars/words/lines/in-word
@@ -38,22 +38,14 @@
         (count-charo c chars words lines in-word c2 w2 l2 iw2)
         (count-charo-listo rest c2 w2 l2 iw2 chars1 words1 lines1 in-word1)))))
 
-; A carrier Rel holding (chars words lines in-word) for introspection.
-; Its body is never called — it exists only to be found via find-by-contento.
-(defrel (wc-carriero chars words lines in-word carrier)
-  (raw-rel (rel (unused) (== unused unused))
-           (chars words lines in-word)
-           carrier))
-
+; main: enqueue a trivial Rel with initial state (0 0 0 0) as published args.
+; The entry is a state-holder (non-nil args) — never dequeued as runnable.
 (defrel (main args ops)
-  (fresh (carrier)
-    (conj
-      (wc-carriero 0 0 0 0 carrier)
-      (call cons-ops (add carrier) (no-ops) ops))))
+  (call cons-ops (add (rel (x) (== x x)) (0 0 0 0)) (no-ops) ops))
 
 (defrel (handle_input agenda fd input ops)
   (disj
-    ; EOF: find the live carrier, report final counts, do not re-add.
+    ; EOF: find the live counter, report final counts, do not re-add.
     (fresh (id chars words lines iw)
       (conj
         (== input ())
@@ -61,13 +53,12 @@
         (call cons-ops
           (output (chars chars words words lines lines))
           (no-ops) ops)))
-    ; Data: find carrier, update state, remove old, add new carrier.
-    (fresh (id chars words lines iw c2 w2 l2 iw2 new-carrier ops0 ops1)
+    ; Data: find counter, update state, remove old, add updated.
+    (fresh (id chars words lines iw c2 w2 l2 iw2 ops0 ops1)
       (conj
         (=/= input ())
         (find-by-contento agenda (chars words lines iw) id)
         (count-charo-listo input chars words lines iw c2 w2 l2 iw2)
         (call cons-ops (remove id) (no-ops) ops0)
-        (wc-carriero c2 w2 l2 iw2 new-carrier)
-        (call cons-ops (add new-carrier) ops0 ops1)
+        (call cons-ops (add (rel (x) (== x x)) (c2 w2 l2 iw2)) ops0 ops1)
         (== ops ops1)))))

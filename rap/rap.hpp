@@ -171,11 +171,16 @@ inline StepResult RapEvaluator::handle_cons_ops(
   Term op_head = Term::nil();
   Term op_rest = Term::nil();
   Term op_arg  = Term::nil();
+  Term op_arg2 = Term::nil();  // optional second arg (for add rel-term args)
   if (op_term.tag == TermTag::Pair && op_term.pair) {
     op_head = walk(op_term.pair->car, st.subst, RelEnv{});
     op_rest = walk(op_term.pair->cdr, st.subst, RelEnv{});
-    if (op_rest.tag == TermTag::Pair && op_rest.pair)
+    if (op_rest.tag == TermTag::Pair && op_rest.pair) {
       op_arg = walk(op_rest.pair->car, st.subst, RelEnv{});
+      Term op_rest2 = walk(op_rest.pair->cdr, st.subst, RelEnv{});
+      if (op_rest2.tag == TermTag::Pair && op_rest2.pair)
+        op_arg2 = walk(op_rest2.pair->car, st.subst, RelEnv{});
+    }
   }
 
   // If Op is not a valid Pair (tag . (arg . ())), succeed without pushing
@@ -189,15 +194,16 @@ inline StepResult RapEvaluator::handle_cons_ops(
       op_rest.tag == TermTag::Pair && op_rest.pair) {
 
     if (sym_lit_eq(op_head.sym, "add")) {
-      op.tag        = OpTag::Add;
-      op.query_term = deep_copy_term(cs->arena, op_arg);
-      push_this_op  = true;
+      op.tag          = OpTag::Add;
+      op.add.rel_term = deep_copy_term(cs->arena, op_arg);
+      op.add.args     = deep_copy_term(cs->arena, op_arg2);  // nil if 1-arg form
+      push_this_op    = true;
     } else if (sym_lit_eq(op_head.sym, "remove")) {
       if (op_arg.tag != TermTag::Int) { /* non-Int remove: ignore */ }
       else {
-        op.tag        = OpTag::Remove;
-        op.query_term = op_arg;  // Int term: no heap pointers, no copy needed
-        push_this_op  = true;
+        op.tag      = OpTag::Remove;
+        op.query_id = static_cast<std::uint32_t>(op_arg.value);
+        push_this_op = true;
       }
     } else if (sym_lit_eq(op_head.sym, "output")) {
       op.tag         = OpTag::Output;

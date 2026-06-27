@@ -1,24 +1,23 @@
 ; examples/todo.rap — interactive to-do list
-; Demonstrates: stateful agenda, character-list command parsing, add/remove ops.
+; Demonstrates: published args for item storage, find-by-contento, add/remove ops.
 ;
 ; Commands (as character lists):
 ;   a d d SPACE item-chars NEWLINE  — add item
 ;   d o n e SPACE item-chars NEWLINE — mark done (removes from agenda)
 ;   l i s t NEWLINE                  — list all items
 ;
-; Items are stored as carrier Rels (via carriero) on the agenda.
+; Items are stored as state-holding agenda entries with args = (todo item-chars).
 ; Run: ./raprunner examples/todo.rap
 
-; Collect all (todo item) values from carrier Rel entries on the agenda
+; Collect all item values from entries whose published args match (todo item).
 (defrel (collect-todoso agenda items)
   (disj
     (conj (== agenda ()) (== items ()))
-    (fresh (entry rest entry-id entry-rel args item tail)
+    (fresh (entry rest entry-id entry-rel entry-args item tail)
       (conj
         (== agenda (entry . rest))
-        (== entry (entry-id . entry-rel))
-        (rel-argso entry-rel args)
-        (== args ((todo item)))
+        (== entry (entry-id entry-rel entry-args))
+        (== entry-args (todo item))
         (collect-todoso rest tail)
         (== items (item . tail))))))
 
@@ -39,24 +38,27 @@
   (fresh (sp)
     (charo sp 32)
     (disj
-      (fresh (arg ops0 carrier)
+      ; add: enqueue a trivial Rel with published args (todo item-chars)
+      (fresh (arg ops0)
         (conj
           (== input (a . (d . (d . (sp . arg)))))
-          (carriero (todo arg) carrier)
-          (call cons-ops (add carrier) (no-ops) ops0)
+          (call cons-ops (add (rel (x) (== x x)) (todo arg)) (no-ops) ops0)
           (call cons-ops (output (added arg)) ops0 ops)))
+      ; done: find entry by matching (todo arg), remove it
       (fresh (arg ops0 id)
         (conj
           (== input (d . (o . (n . (e . (sp . arg))))))
-          (find-by-contento agenda ((todo arg)) id)
+          (find-by-contento agenda (todo arg) id)
           (call cons-ops (remove id) (no-ops) ops0)
           (call cons-ops (output (removed arg)) ops0 ops)))
+      ; list: collect all todo items and output them
       (fresh (rest items ops0)
         (conj
           (== input (l . (i . (s . (t . rest)))))
           (collect-todoso agenda items)
           (output-eacho items (no-ops) ops0)
           (== ops ops0)))
+      ; unknown command
       (fresh (head tail)
         (conj
           (== input (head . tail))

@@ -22,10 +22,8 @@ enum class TermTag : std::uint8_t { Var, BVar, Int, Sym, Nil, Pair, Rel };
 
 // RelNode: anonymous relation value (Stage 0A)
 struct RelNode {
-  std::uint32_t param_count;      // number of parameters
-  const Goal*   body;             // compiled body (uses BVar for parameters)
-  const Term*   captured_values;  // nullptr if no captures (_relo only)
-  std::uint32_t captured_count;   // 0 if no captures
+  std::uint32_t param_count;  // number of parameters
+  const Goal*   body;         // compiled body (uses BVar for parameters)
 };
 static_assert(std::is_trivially_destructible_v<RelNode>);
 
@@ -626,23 +624,8 @@ inline const Goal* deep_copy_goal(Arena& dest, const Goal* g) {
       if (rt.tag == TermTag::Rel && rt.rel) {
         RelNode* rn = dest.make<RelNode>();
         if (rn) {
-          rn->param_count    = rt.rel->param_count;
-          rn->body           = deep_copy_goal(dest, rt.rel->body);
-          rn->captured_count = rt.rel->captured_count;
-          if (rt.rel->captured_count > 0 && rt.rel->captured_values) {
-            Term* caps = static_cast<Term*>(
-                dest.alloc(rt.rel->captured_count * sizeof(Term), alignof(Term)));
-            if (caps) {
-              for (std::uint32_t ci = 0; ci < rt.rel->captured_count; ++ci)
-                caps[ci] = deep_copy_term(dest, rt.rel->captured_values[ci]);
-              rn->captured_values = caps;
-            } else {
-              rn->captured_values = nullptr;
-              rn->captured_count  = 0;
-            }
-          } else {
-            rn->captured_values = nullptr;
-          }
+          rn->param_count = rt.rel->param_count;
+          rn->body        = deep_copy_goal(dest, rt.rel->body);
           rt = Term::relation(rn);
         }
       }
@@ -853,8 +836,7 @@ public:
       sym_multaddiso_ = intern_cstr(*sym_arena_, *intern_, "multaddiso");
       sym_charo_      = intern_cstr(*sym_arena_, *intern_, "charo");
       sym_boundo_     = intern_cstr(*sym_arena_, *intern_, "boundo");
-      sym_rel_argso_  = intern_cstr(*sym_arena_, *intern_, "rel-argso");
-      sym_relo_       = intern_cstr(*sym_arena_, *intern_, "_relo");
+      sym_rel_arityo_ = intern_cstr(*sym_arena_, *intern_, "rel-arityo");
     }
   }
 
@@ -925,8 +907,7 @@ private:
   StepResult handle_multaddiso(const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_charo     (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_boundo    (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
-  StepResult handle_rel_argso (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
-  StepResult handle_relo      (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_rel_arityo(const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
 
   // Helper: add a constraint and continue.
   StepResult add_constraint(Term u, Term v, std::int64_t offset, ConstraintRel rel,
@@ -950,8 +931,7 @@ private:
   const SymEntry* sym_multaddiso_ = nullptr;
   const SymEntry* sym_charo_      = nullptr;
   const SymEntry* sym_boundo_     = nullptr;
-  const SymEntry* sym_rel_argso_  = nullptr;
-  const SymEntry* sym_relo_       = nullptr;
+  const SymEntry* sym_rel_arityo_ = nullptr;
 
   StepResult step(Work* w, WorkQueue& q,
                   const RelEnv& rel_env, State& yielded);
@@ -1021,8 +1001,7 @@ inline StepResult Evaluator::handleKnownRelation(
   if (name == sym_multaddiso_) return handle_multaddiso(args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_charo_)      return handle_charo     (args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_boundo_)     return handle_boundo    (args, arg_count, st, a, q, k, w, yielded, rel_env);
-  if (name == sym_rel_argso_)  return handle_rel_argso (args, arg_count, st, a, q, k, w, yielded, rel_env);
-  if (name == sym_relo_)       return handle_relo      (args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_rel_arityo_) return handle_rel_arityo(args, arg_count, st, a, q, k, w, yielded, rel_env);
   return StepResult::NotHandled;
 }
 
@@ -1357,81 +1336,24 @@ inline StepResult Evaluator::handle_boundo(
 }
 
 // ============================================================================
-// rel-argso: (rel-argso rel captures-out)
-// Returns the captured_values list from a RelNode built by _relo.
-// Ordinary (rel ...) Rels have captured_count==0, so result is ().
+// rel-arityo: (rel-arityo rel-term n)
+// Unifies n with the param_count of rel-term. Reads a public structural fact;
+// does not involve closures or captured values.
 // ============================================================================
-inline StepResult Evaluator::handle_rel_argso(
+inline StepResult Evaluator::handle_rel_arityo(
     const Term* args, std::uint32_t ac,
     State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
     const RelEnv& re)
 {
   if (ac != 2) return StepResult::NoYield;
-  if (args[0].tag != TermTag::Rel || !args[0].rel) return StepResult::NoYield;
-  const RelNode* rn = args[0].rel;
+  Term rel_t = resolve_bvar(args[0], st.env);
+  rel_t = walk(rel_t, st.subst, RelEnv{});
+  if (rel_t.tag != TermTag::Rel || !rel_t.rel) return StepResult::NoYield;
 
-  // Build list of captured values (order: first capture is car of outermost pair).
-  Term lst = Term::nil();
-  for (std::uint32_t i = rn->captured_count; i-- > 0; ) {
-    PairNode* p = a.make<PairNode>();
-    if (!p) return StepResult::OOM;
-    p->car = rn->captured_values[i];
-    p->cdr = lst;
-    lst = Term::make_pair(p);
-  }
-  return unify_and_continue(args[1], lst, st, a, q, k, w, y, re);
-}
-
-// ============================================================================
-// _relo: (_relo template-rel captures rel-out)
-// Creates a new RelNode in sym_arena_ with captured_values snapshotted.
-// ============================================================================
-inline StepResult Evaluator::handle_relo(
-    const Term* args, std::uint32_t ac,
-    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
-    const RelEnv& re)
-{
-  if (ac != 3) return StepResult::NoYield;
-  if (args[0].tag != TermTag::Rel || !args[0].rel) return StepResult::NoYield;
-  if (!sym_arena_) return StepResult::NoYield;
-
-  const RelNode* tmpl = args[0].rel;
-
-  // Walk the captures list (already walk_deep'd) to count and collect elements.
-  // Reject if any element is still an unbound Var.
-  Term caps_lst = args[1];
-  std::uint32_t count = 0;
-  {
-    Term cur = caps_lst;
-    while (cur.tag == TermTag::Pair && cur.pair) {
-      if (cur.pair->car.tag == TermTag::Var) return StepResult::NoYield;
-      ++count;
-      cur = cur.pair->cdr;
-    }
-    if (cur.tag != TermTag::Nil) return StepResult::NoYield;  // improper list
-  }
-
-  // Allocate new RelNode and captures array in sym_arena_ (permanent).
-  RelNode* rn = sym_arena_->make<RelNode>();
-  if (!rn) return StepResult::OOM;
-  rn->param_count     = tmpl->param_count;
-  rn->body            = tmpl->body;
-  rn->captured_count  = count;
-  rn->captured_values = nullptr;
-
-  if (count > 0) {
-    Term* caps = static_cast<Term*>(
-        sym_arena_->alloc(count * sizeof(Term), alignof(Term)));
-    if (!caps) return StepResult::OOM;
-    Term cur = caps_lst;
-    for (std::uint32_t i = 0; i < count; ++i) {
-      caps[i] = deep_copy_term(*sym_arena_, cur.pair->car);
-      cur = cur.pair->cdr;
-    }
-    rn->captured_values = caps;
-  }
-
-  return unify_and_continue(args[2], Term::relation(rn), st, a, q, k, w, y, re);
+  Term n     = Term::integer(static_cast<std::int32_t>(rel_t.rel->param_count));
+  Term n_out = resolve_bvar(args[1], st.env);
+  n_out = walk(n_out, st.subst, RelEnv{});
+  return unify_and_continue(n_out, n, st, a, q, k, w, y, re);
 }
 
 // probe_run defined before step because step() calls probe_run().

@@ -50,7 +50,7 @@ struct RapLoop {
     // Permanent evaluator arena: holds the RapEvaluator's client region and
     // interned "no-ops"/"cons-ops"/"empty-ops" SymEntries.  These must survive
     // across eval_arena resets, so they live in a separate never-reset buffer.
-    alignas(64) std::uint8_t rap_buf[MAX_CHANGESET_ARENA + 1024];
+    alignas(64) std::uint8_t rap_buf[MAX_CHANGESET_ARENA + 32 * 1024];
     Arena       rap_arena;
 
     // Queues.
@@ -154,10 +154,8 @@ struct RapLoop {
 
             RelNode* rn = intern_arena.make<RelNode>();
             if (!rn) continue;
-            rn->param_count     = param_count;
-            rn->body            = body;
-            rn->captured_count  = 0;
-            rn->captured_values = nullptr;
+            rn->param_count = param_count;
+            rn->body        = body;
 
             rel_env.define(intern_arena, rel_name, Term::relation(rn));
             any = true;
@@ -171,26 +169,26 @@ struct RapLoop {
         if (!name_sym) return 0;
         Term rel_term = rel_env.lookup(name_sym);
         if (rel_term.tag != TermTag::Rel) return 0;
-        return agenda.enqueue(rel_term);
+        return agenda.enqueue(rel_term, Term::nil());
     }
 
     // Enqueue a query from a raw Rel term. Returns assigned query_id, or 0.
     std::uint32_t enqueue_term(Term rel_term) {
         if (rel_term.tag != TermTag::Rel) return 0;
-        return agenda.enqueue(rel_term);
+        return agenda.enqueue(rel_term, Term::nil());
     }
 
-    // Run until the agenda is empty.
+    // Run until no runnable entries remain.
     void run_until_empty(std::uint32_t max_steps = 10000) {
-        for (std::uint32_t s = 0; s < max_steps && !agenda.empty(); ++s)
+        for (std::uint32_t s = 0; s < max_steps && agenda.has_runnable(); ++s)
             run_one();
     }
 
-    // Execute one query from the agenda.
+    // Execute one runnable query from the agenda.
     void run_one() {
         if (!evaluator) return;
         QueryEntry entry;
-        if (!agenda.dequeue(entry)) return;
+        if (!agenda.dequeue_runnable(entry)) return;
 
         // Build agenda list term from remaining entries.
         spine.reset();
@@ -202,18 +200,21 @@ struct RapLoop {
         evaluator->init_changeset();
 
         if (entry.query_term.tag == TermTag::Rel) {
-            const RelNode* rel      = entry.query_term.rel;
-            std::uint32_t  nparams  = rel->param_count;
-            if (nparams == 0) nparams = 1;  // safety: at least 1 arg
+            const RelNode* rel     = entry.query_term.rel;
+            std::uint32_t  nparams = rel->param_count;
 
-            // Allocate argument array: first arg = agenda_term, rest = fresh Vars.
+            // Allocate exactly nparams call args.
             Term* call_args = static_cast<Term*>(
                 eval_arena.alloc(nparams * sizeof(Term), alignof(Term)));
             if (!call_args) goto apply;
 
+            // Param 0 always = agenda_term.
+            // Param 1 (if present): pass published state, OR Var(1) if nil
+            // (nil means runnable — use unbound Var so cons-ops can bind it).
             call_args[0] = agenda_term;
-            for (std::uint32_t i = 1; i < nparams; ++i)
-                call_args[i] = Term::var(i);  // pre-allocated Vars 1..nparams-1
+            if (nparams >= 2)
+                call_args[1] = (entry.args.tag == TermTag::Nil)
+                              ? Term::var(1) : entry.args;
 
             {
                 GoalCall gc;
@@ -226,9 +227,9 @@ struct RapLoop {
                 call_goal->tag  = GoalTag::Call;
                 call_goal->call = gc;
 
-                // vars_used = nparams so fresh execution vars start at nparams,
-                // not conflicting with our pre-allocated arg vars.
-                evaluator->runN(1, call_goal, Term::var(0), nparams, rel_env,
+                // vars_used = 2 always: Var(0) = result var, Var(1) reserved for
+                // wrapper ops (enqueue_handle_input inner call uses Term::var(1)).
+                evaluator->runN(1, call_goal, Term::var(0), 2, rel_env,
                     [](Term, State) {});
             }
         }
@@ -257,11 +258,10 @@ private:
             const Op& op = cs.ops[i];
             switch (op.tag) {
                 case OpTag::Add:
-                    agenda.enqueue(op.query_term);
+                    agenda.enqueue(op.add.rel_term, op.add.args);
                     break;
                 case OpTag::Remove:
-                    if (op.query_term.tag == TermTag::Int)
-                        agenda.remove(static_cast<std::uint32_t>(op.query_term.value));
+                    agenda.remove(op.query_id);
                     break;
                 case OpTag::Output: {
                     // Deep-copy into intern_arena (stable, never reset) so the

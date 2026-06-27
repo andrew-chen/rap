@@ -28,12 +28,11 @@ static Term parse_term(RapLoop& loop, Arena& tmp, const char* str) {
 }
 
 // ============================================================================
-// Build a carrier RelNode in the permanent arena with one captured value.
-// The body is a trivial (== BVar(0) BVar(0)) that always succeeds; the
-// carrier is never actually called — only introspected via rel-argso.
+// Build a minimal 1-param RelNode with trivial body (== BVar(0) BVar(0)).
+// Used as the rel_term for state-holding agenda entries; content is passed
+// separately as the published args to agenda.enqueue().
 // ============================================================================
-static Term make_carrier(Arena& stable, Term content) {
-    // Build trivial body: (== BVar(0) BVar(0))
+static Term make_minimal_rel(Arena& stable) {
     Term bv0; bv0.tag = TermTag::BVar; bv0.id = 0;
     Goal* body = stable.make<Goal>();
     if (!body) return Term::nil();
@@ -41,18 +40,10 @@ static Term make_carrier(Arena& stable, Term content) {
     body->eq.u = bv0;
     body->eq.v = bv0;
 
-    // Build captured_values array with one deep-copied element.
-    Term* caps = static_cast<Term*>(stable.alloc(sizeof(Term), alignof(Term)));
-    if (!caps) return Term::nil();
-    caps[0] = deep_copy_term(stable, content);
-
-    // Build RelNode.
     RelNode* rn = stable.make<RelNode>();
     if (!rn) return Term::nil();
-    rn->param_count     = 1;
-    rn->body            = body;
-    rn->captured_count  = 1;
-    rn->captured_values = caps;
+    rn->param_count = 1;
+    rn->body        = body;
 
     return Term::relation(rn);
 }
@@ -65,25 +56,22 @@ int main() {
 
     // -------------------------------------------------------------------------
     // Load the strengthen-agendao relation definitions.
-    // Now using rel-argso + find-by-contento for introspection.
-    // Each agenda entry is (id . rel-term) where rel-term is a carrier Rel
-    // with captured_values = [(check H T)] or [(check+ H T R)] etc.
+    // Agenda entries are now 3-element lists: (id rel-term args).
+    // find-by-contento matches on entry-args directly.
+    // weak-check-qido / not-weak-check-qido destructure (qid rel-term entry-args).
     // -------------------------------------------------------------------------
     const char* defs =
-        // weak-check-qido: entry is (qid . rel-term), rel-argso gives [(check H T)]
+        // weak-check-qido: entry is (qid rel-term entry-args), args = (check H T)
         "(defrel (weak-check-qido entry H T qid)"
-        "  (fresh (rel-term args)"
-        "    (== entry (qid . rel-term))"
-        "    (rel-argso rel-term args)"
-        "    (== args ((check H T)))))"
+        "  (fresh (rel-term entry-args)"
+        "    (== entry (qid rel-term entry-args))"
+        "    (== entry-args (check H T))))"
 
-        // not-weak-check-qido: same shape but content != (check H T)
+        // not-weak-check-qido: entry whose args != (check H T)
         "(defrel (not-weak-check-qido entry H T)"
-        "  (fresh (qid rel-term args chk)"
-        "    (== entry (qid . rel-term))"
-        "    (rel-argso rel-term args)"
-        "    (== args (chk))"
-        "    (=/= chk (check H T))))"
+        "  (fresh (qid rel-term entry-args)"
+        "    (== entry (qid rel-term entry-args))"
+        "    (=/= entry-args (check H T))))"
 
         "(defrel (collect-weak-qidso agenda H T qids)"
         "  (disj"
@@ -109,23 +97,22 @@ int main() {
         "        (call qids->remove-opso rest ops-tail)"
         "        (call cons-ops (remove qid) ops-tail ops)))))"
 
-        // find-by-contento: find entry whose rel-argso matches pattern-list
-        "(defrel (find-by-contento agenda pattern-list id)"
+        // find-by-contento: matches entry (id rel-term args) where args = pattern
+        "(defrel (find-by-contento agenda pattern id)"
         "  (fresh (entry rest entry-id entry-rel entry-args)"
         "    (== agenda (entry . rest))"
         "    (disj"
         "      (conj"
-        "        (== entry (entry-id . entry-rel))"
-        "        (rel-argso entry-rel entry-args)"
-        "        (== entry-args pattern-list)"
+        "        (== entry (entry-id entry-rel entry-args))"
+        "        (== entry-args pattern)"
         "        (== id entry-id))"
-        "      (find-by-contento rest pattern-list id))))"
+        "      (find-by-contento rest pattern id))))"
 
         // strengthen-agendao: find the strong check+ entry via find-by-contento
         "(defrel (strengthen-agendao agenda ops)"
         "  (fresh (H T R strong-qid weak-qids ops0)"
         "    (conj"
-        "      (find-by-contento agenda ((check+ H T R)) strong-qid)"
+        "      (find-by-contento agenda (check+ H T R) strong-qid)"
         "      (collect-weak-qidso agenda H T weak-qids)"
         "      (call qids->remove-opso weak-qids ops0)"
         "      (call cons-ops (output (pruned H T)) ops0 ops))))";
@@ -137,22 +124,22 @@ int main() {
     // Set up the test agenda.
     //
     // Enqueue strengthen-agendao FIRST (it will be at the front of the queue),
-    // then set next_id=10 and enqueue the 4 carrier entries. When run_one()
+    // then set next_id=10 and enqueue the 4 state-holder entries. When run_one()
     // dequeues strengthen-agendao, the remaining agenda is:
-    //   [id=10: carrier((check  hypA test1)),
-    //    id=11: carrier((check+ hypA test1 refineX)),
-    //    id=12: carrier((check  hypA test1)),
-    //    id=13: carrier((explore hypB 2))]
+    //   [id=10: (10 minimal-rel (check  hypA test1)),
+    //    id=11: (11 minimal-rel (check+ hypA test1 refineX)),
+    //    id=12: (12 minimal-rel (check  hypA test1)),
+    //    id=13: (13 minimal-rel (explore hypB 2))]
     // strengthen-agendao finds id=11 as the strong check+ and emits
     // Remove(10), Remove(12), Output((pruned hypA test1)).
     // -------------------------------------------------------------------------
 
-    // Enqueue strengthen-agendao first.
+    // Enqueue strengthen-agendao first (2-param, nil args → runnable).
     std::uint32_t sa_id = loop.enqueue_query("strengthen-agendao");
     EXPECT(sa_id != 0u, "strengthen-agendao enqueued");
     if (failed) { std::printf("\nAborting: enqueue_query failed.\n"); return 1; }
 
-    // Force the 4 carrier entries to get ids 10-13.
+    // Force the 4 state-holder entries to get ids 10-13.
     loop.agenda.next_id = 10;
 
     // Build content terms using our intern table so symbol pointers match.
@@ -169,31 +156,29 @@ int main() {
     EXPECT(content12.tag == TermTag::Pair, "content12 parsed");
     EXPECT(content13.tag == TermTag::Pair, "content13 parsed");
 
-    // Build carrier Rel terms in the permanent intern_arena.
-    Term carrier10 = make_carrier(loop.intern_arena, content10);
-    Term carrier11 = make_carrier(loop.intern_arena, content11);
-    Term carrier12 = make_carrier(loop.intern_arena, content12);
-    Term carrier13 = make_carrier(loop.intern_arena, content13);
+    // Build a minimal Rel (1-param, trivial body) to use as the rel_term for
+    // all state-holder entries. Content is published separately as args.
+    Term minimal_rel = make_minimal_rel(loop.intern_arena);
 
-    // Enqueue carriers (deep-copied into agenda buffer).
-    std::uint32_t id10 = loop.agenda.enqueue(carrier10);
-    std::uint32_t id11 = loop.agenda.enqueue(carrier11);
-    std::uint32_t id12 = loop.agenda.enqueue(carrier12);
-    std::uint32_t id13 = loop.agenda.enqueue(carrier13);
+    // Enqueue state-holders: args = content, non-nil → never dequeued as runnable.
+    std::uint32_t id10 = loop.agenda.enqueue(minimal_rel, content10);
+    std::uint32_t id11 = loop.agenda.enqueue(minimal_rel, content11);
+    std::uint32_t id12 = loop.agenda.enqueue(minimal_rel, content12);
+    std::uint32_t id13 = loop.agenda.enqueue(minimal_rel, content13);
 
     EXPECT(id10 == 10u, "item10 gets id=10");
     EXPECT(id11 == 11u, "item11 gets id=11");
     EXPECT(id12 == 12u, "item12 gets id=12");
     EXPECT(id13 == 13u, "item13 gets id=13");
 
-    // Agenda now: [sa, carrier10, carrier11, carrier12, carrier13]
+    // Agenda now: [sa (runnable), entry10-13 (state-holders)]
     EXPECT(loop.agenda.count == 5u, "Agenda has 5 entries before run");
 
     // -------------------------------------------------------------------------
-    // Run strengthen-agendao (dequeued from front).
+    // Run strengthen-agendao (dequeued from front as the only runnable entry).
     // After execution, expect:
     //   - ChangeSet: Remove(10), Remove(12), Output((pruned hypA test1))
-    //   - Agenda after apply: carrier11 and carrier13 remain (count=2)
+    //   - Agenda after apply: entry11 and entry13 remain (count=2)
     //   - OutputQueue: 1 term
     // -------------------------------------------------------------------------
     loop.run_one();

@@ -62,11 +62,10 @@ static void apply_changeset(const ChangeSet& cs,
         const Op& op = cs.ops[i];
         switch (op.tag) {
             case OpTag::Add:
-                agenda.enqueue(op.query_term);
+                agenda.enqueue(op.add.rel_term, op.add.args);
                 break;
             case OpTag::Remove:
-                if (op.query_term.tag == TermTag::Int)
-                    agenda.remove(static_cast<std::uint32_t>(op.query_term.value));
+                agenda.remove(op.query_id);
                 break;
             case OpTag::Output: {
                 // Deep-copy into intern_arena so the term survives eval_arena reset.
@@ -101,21 +100,22 @@ static void run_one(RapEvaluator& evaluator,
     if (entry.query_term.tag == TermTag::Rel) {
         const RelNode* rel     = entry.query_term.rel;
         std::uint32_t  nparams = rel->param_count;
-        if (nparams == 0) nparams = 1;
 
         Term* call_args = static_cast<Term*>(
             eval_arena.alloc(nparams * sizeof(Term), alignof(Term)));
         if (call_args) {
             call_args[0] = agenda_term;
-            for (std::uint32_t i = 1; i < nparams; ++i)
-                call_args[i] = Term::var(i);
+            if (nparams >= 2)
+                call_args[1] = (entry.args.tag == TermTag::Nil)
+                              ? Term::var(1) : entry.args;
 
             Goal* call_goal = eval_arena.make<Goal>();
             if (call_goal) {
                 call_goal->tag  = GoalTag::Call;
                 call_goal->call = GoalCall{entry.query_term, call_args, nparams};
 
-                evaluator.runN(1, call_goal, Term::var(0), nparams, rel_env,
+                // vars_used = 2 always: reserves Var(1) for wrapper ops.
+                evaluator.runN(1, call_goal, Term::var(0), 2, rel_env,
                                [](Term, State) {});
             }
         }
@@ -247,9 +247,9 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     inner_args[0] = agenda_snap;        // agenda snapshot
     inner_args[1] = Term::integer(fd);  // fd identifier
     inner_args[2] = input_term;         // char-list or nil (EOF)
-    inner_args[3] = Term::bvar(1);      // ops = bvar(1) (wrapper's 2nd param, unbound)
+    inner_args[3] = Term::var(1);       // ops = Var(1), reserved by run_one's vars_used=2
 
-    // Build the inner call goal: (call handle_input agenda fd input bvar(1))
+    // Build the inner call goal: (call handle_input agenda fd input Var(1))
     Goal* body = wrap_arena.make<Goal>();
     if (!body) {
         std::fprintf(stderr, "raprunner: OOM building wrapper body\n");
@@ -258,21 +258,20 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     body->tag  = GoalTag::Call;
     body->call = GoalCall{handle_input_rel, inner_args, 4};
 
-    // Build the wrapper RelNode (2 params: agenda bvar(0), ops bvar(1)).
-    // run_one calls it as (wrapper agenda_term Var(1)) where Var(1) is unbound,
-    // so ops stays unbound for handle_input to bind via cons-ops.
+    // Build the wrapper RelNode (1 param: agenda bvar(0)).
+    // Enqueued with nil args → runnable. run_one passes agenda as call_args[0].
+    // Var(1) in the body is reserved by vars_used=2, staying unbound until
+    // handle_input binds it via cons-ops.
     RelNode* wrapper = wrap_arena.make<RelNode>();
     if (!wrapper) {
         std::fprintf(stderr, "raprunner: OOM building wrapper RelNode\n");
         return;
     }
-    wrapper->param_count     = 2;
-    wrapper->body            = body;
-    wrapper->captured_count  = 0;
-    wrapper->captured_values = nullptr;
+    wrapper->param_count = 1;
+    wrapper->body        = body;
 
     Term wrapper_term = Term::relation(wrapper);
-    if (!agenda.enqueue(wrapper_term)) {
+    if (!agenda.enqueue(wrapper_term, Term::nil())) {
         std::fprintf(stderr, "raprunner: agenda OOM enqueuing handle_input\n");
     }
 
@@ -335,10 +334,8 @@ static bool load_program(const char*  path,
             std::fprintf(stderr, "raprunner: OOM in prog_arena\n");
             return false;
         }
-        rn->param_count     = e->rel_term.rel->param_count;
-        rn->body            = body_copy;
-        rn->captured_count  = 0;
-        rn->captured_values = nullptr;
+        rn->param_count = e->rel_term.rel->param_count;
+        rn->body        = body_copy;
         rel_env.define(prog_arena, e->name, Term::relation(rn));
     }
 
