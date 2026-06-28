@@ -1,6 +1,11 @@
 ; examples/wc.rap — character, word, and line counter
-; Demonstrates: published args for state, find-by-contento, add with args.
-; State (chars words lines in-word) is published as agenda entry args.
+; Demonstrates: a genuinely self-perpetuating query owning its own
+; state. There is no separate state-holder entry — wc-counter IS the
+; one running query, dequeued and called like any other Rel. It
+; receives its own published args back, decides whether to continue,
+; and if so re-adds itself with updated args. There is nothing on the
+; agenda that exists only to be skipped.
+;
 ; Run: ./raprunner examples/wc.rap < somefile.txt
 
 ; Count one character, updating chars/words/lines/in-word
@@ -38,27 +43,59 @@
         (count-charo c chars words lines in-word c2 w2 l2 iw2)
         (count-charo-listo rest c2 w2 l2 iw2 chars1 words1 lines1 in-word1)))))
 
-; main: enqueue a trivial Rel with initial state (0 0 0 0) as published args.
-; The entry is a state-holder (non-nil args) — never dequeued as runnable.
+; wc-counter: the one real running query. Its own published args are
+; (chars words lines in-word input) — its accumulated state plus
+; whatever input block handle_input most recently handed it via
+; remove-and-readd. When dequeued and called, it processes that input
+; and re-adds itself with updated state and a fresh, empty input slot
+; — there is always exactly one wc-counter entry on the agenda, and it
+; is always the thing actually running, never a thing being skipped.
+(defrel (wc-counter agenda args ops)
+  (fresh (chars words lines in-word input)
+    (conj
+      (== args (chars words lines in-word input))
+      (disj
+        ; Nothing new to process: re-add unchanged, input slot stays empty.
+        (conj
+          (== input ())
+          (call cons-ops
+            (add (rel (a r) (call wc-counter a r)) (chars words lines in-word ()))
+            (no-ops) ops))
+        ; New input: update state, re-add with input slot cleared again.
+        (fresh (c2 w2 l2 iw2)
+          (conj
+            (=/= input ())
+            (count-charo-listo input chars words lines in-word c2 w2 l2 iw2)
+            (call cons-ops
+              (add (rel (a r) (call wc-counter a r)) (c2 w2 l2 iw2 ()))
+              (no-ops) ops)))))))
+
 (defrel (main args ops)
-  (call cons-ops (add (rel (x) (== x x)) (0 0 0 0)) (no-ops) ops))
+  (call cons-ops
+    (add (rel (a r) (call wc-counter a r)) (0 0 0 0 ()))
+    (no-ops) ops))
 
 (defrel (handle_input agenda fd input ops)
   (disj
-    ; EOF: find the live counter, report final counts, do not re-add.
-    (fresh (id chars words lines iw)
+    ; EOF: find wc-counter's current entry, report final counts,
+    ; remove it so the program terminates (agenda becomes empty).
+    (fresh (id chars words lines iw old-input ops0)
       (conj
         (== input ())
-        (find-by-contento agenda (chars words lines iw) id)
+        (find-by-contento agenda (chars words lines iw old-input) id)
+        (call cons-ops (remove id) (no-ops) ops0)
         (call cons-ops
-          (output (chars chars words words lines lines))
-          (no-ops) ops)))
-    ; Data: find counter, update state, remove old, add updated.
-    (fresh (id chars words lines iw c2 w2 l2 iw2 ops0 ops1)
+          (output (counted chars chars words words lines lines))
+          ops0 ops)))
+    ; Data: find wc-counter's current entry, hand it the new input by
+    ; replacing its empty input slot, remove the old entry, add the
+    ; updated one. wc-counter itself processes the input next time it
+    ; runs — handle_input does no counting itself.
+    (fresh (id chars words lines iw old-input ops0)
       (conj
         (=/= input ())
-        (find-by-contento agenda (chars words lines iw) id)
-        (count-charo-listo input chars words lines iw c2 w2 l2 iw2)
+        (find-by-contento agenda (chars words lines iw old-input) id)
         (call cons-ops (remove id) (no-ops) ops0)
-        (call cons-ops (add (rel (x) (== x x)) (c2 w2 l2 iw2)) ops0 ops1)
-        (== ops ops1)))))
+        (call cons-ops
+          (add (rel (a r) (call wc-counter a r)) (chars words lines iw input))
+          ops0 ops)))))

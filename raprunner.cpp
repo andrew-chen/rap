@@ -58,6 +58,7 @@ alignas(64) static std::uint8_t wrap_buf[64 * 1024];
 static void apply_changeset(const ChangeSet& cs,
                             Agenda& agenda,
                             Arena&  intern_arena) {
+    //printf("cs.op_count at the start of apply_changeset is %d\n",cs.op_count);
     for (std::uint32_t i = 0; i < cs.op_count; ++i) {
         const Op& op = cs.ops[i];
         switch (op.tag) {
@@ -89,7 +90,12 @@ static void run_one(RapEvaluator& evaluator,
                     Arena&        eval_arena,
                     Arena&        intern_arena) {
     QueryEntry entry;
-    if (!agenda.dequeue_runnable(entry)) return;
+    if (!agenda.dequeue_runnable(entry)) {
+	//printf("dequeue_runnable was false, so returning\n");
+	return;
+    } else {
+	//printf("dequeue_runnable returned true, so continuing\n");
+    }
 
     // Build agenda list term from remaining entries.
     spine.reset();
@@ -480,16 +486,20 @@ int main(int argc, char** argv) {
 
     while (true) {
         // Run agenda until no Rel items remain (data items may stay).
-        while (agenda.has_runnable()) {
+	//printf("agenda has the following number of items %d \n",agenda.count);
+	// agenda.debug_print_agenda();
+        if (agenda.has_runnable()) {
             run_one(*evaluator, agenda, spine, rel_env,
                     eval_arena, intern_arena);
-        }
+	    //agenda.debug_print_agenda();
+	} else {
 
-        // No Rel items remain. Reset wrap_arena — all wrappers have executed.
-        wrap_arena.reset();
+		// No Rel items remain. Reset wrap_arena — all wrappers have executed.
+		wrap_arena.reset();
 
-        // Exit if no fds remain.
-        if (watched_fds.empty()) break;
+		// Exit if no fds remain.
+		if (watched_fds.empty()) break;
+	};
 
         // Poll watched fds for input.
         std::vector<struct pollfd> pfds;
@@ -501,7 +511,8 @@ int main(int argc, char** argv) {
             pfds.push_back(pfd);
         }
 
-        int ret = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), -1);
+        // int ret = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), -1);
+        int ret = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), 1);
         if (ret < 0) {
             std::fprintf(stderr, "raprunner: poll error: %s\n",
                          std::strerror(errno));
@@ -518,12 +529,14 @@ int main(int argc, char** argv) {
                 char block[4096];
                 ssize_t n = read(fd, block, sizeof(block));
                 if (n == 0) {
+		    //printf("enqueuing an EOF\n");
                     // EOF: send empty list as input, then drop fd.
                     enqueue_handle_input(wrap_arena, agenda, spine, rel_env,
                                         intern_arena, intern,
                                         handle_input_rel, fd, Term::nil());
                     fds_to_remove.push_back(fd);
                 } else if (n > 0) {
+		    //printf("enqueuing regular characters (not EOF)\n");
                     Term input_term = build_char_list(wrap_arena, intern_arena,
                                                      intern, block, n);
                     enqueue_handle_input(wrap_arena, agenda, spine, rel_env,

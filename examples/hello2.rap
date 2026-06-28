@@ -1,0 +1,19 @@
+; examples/hello.rap — hello world
+; Outputs the character list (h e l l o - w o r l d) and ignores input.
+; Run: ./raprunner examples/hello.rap < /dev/null
+
+    
+(defrel (main args ops)
+ (fresh (ops0)
+  (conj
+   (call cons-ops
+     (output (h e l l o - w o r l d))
+     (no-ops)
+     ops0)
+   (call cons-ops
+     (output (h e l l o - w o r l d))
+     ops0
+     ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
