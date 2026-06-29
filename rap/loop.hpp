@@ -8,6 +8,7 @@
 #include "spine.hpp"
 #include "changeset.hpp"
 #include <cstdio>
+#include <memory>
 #include <new>
 
 constexpr std::uint32_t MAX_OUTPUT_TERMS = 256;
@@ -44,7 +45,9 @@ struct RapLoop {
     OutcomeSyms syms;
 
     // Per-query arena (reset between queries).
-    alignas(64) std::uint8_t eval_buf[EVAL_ARENA_SIZE];
+    // Heap-allocated: EVAL_ARENA_SIZE can be very large (currently 1 GiB), so
+    // an inline member array would overflow the stack when RapLoop is on the stack.
+    std::unique_ptr<std::uint8_t[]> eval_buf;
     Arena       eval_arena;
 
     // Permanent evaluator arena: holds the RapEvaluator's client region and
@@ -68,7 +71,8 @@ struct RapLoop {
 
     RapLoop()
         : intern_arena(intern_buf, sizeof(intern_buf))
-        , eval_arena(eval_buf, sizeof(eval_buf))
+        , eval_buf(std::make_unique<std::uint8_t[]>(EVAL_ARENA_SIZE))
+        , eval_arena(eval_buf.get(), EVAL_ARENA_SIZE)
         , rap_arena(rap_buf, sizeof(rap_buf))
     {}
 
