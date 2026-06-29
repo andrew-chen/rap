@@ -1,0 +1,46 @@
+(defrel (valueato board pos val) (fresh (rest p v) (conj (== board ((p . v) . rest)) (disj (conj (== p pos) (== v val)) (valueato rest pos val)))))
+
+(defrel (matchingo board pos1 pos2) (fresh (v) (conj (=/= pos1 pos2) (conj (valueato board pos1 v) (valueato board pos2 v)))))
+
+(defrel (all-positionso positions) (== positions (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)))
+
+(defrel (find-pairso board candidates pairs) (find-pairso-acc board candidates () pairs))
+
+(defrel (find-pairso-acc board candidates acc pairs) (disj (conj (== candidates ()) (== pairs acc)) (fresh (pos1 rest found-here) (conj (== candidates (pos1 . rest)) (conj (find-matches-foro board pos1 rest found-here) (disj (conj (== found-here ()) (find-pairso-acc board rest acc pairs)) (fresh (the-pair) (conj (== found-here (the-pair . ())) (find-pairso-acc board rest (the-pair . acc) pairs)))))))))
+
+(defrel (find-matches-foro board pos1 later-candidates matches) (fresh (v1) (conj (valueato board pos1 v1) (find-matches-foro-helper board pos1 v1 later-candidates matches))))
+
+(defrel (find-matches-foro-helper board pos1 v1 later-candidates matches) (disj (conj (== later-candidates ()) (== matches ())) (fresh (pos2 rest rest-matches v2) (conj (== later-candidates (pos2 . rest)) (conj (valueato board pos2 v2) (disj (conj (== v1 v2) (conj (== matches ((pos1 . pos2) . rest-matches)) (find-matches-foro-helper board pos1 v1 rest rest-matches))) (conj (=/= v1 v2) (find-matches-foro-helper board pos1 v1 rest matches))))))))
+
+(defrel (solveo board pairs) (fresh (positions) (conj (all-positionso positions) (find-pairso board positions pairs))))
+
+; memory_stage0.rap — convenience loader: all current Stage 1
+; relation definitions in one file, for piping into the REPL so they
+; don't need to be retyped by hand every session.
+;
+; IMPORTANT: every defrel above is written on a SINGLE physical line.
+; This is required — when this file is piped into the REPL via
+; `./repl < memory_stage0.rap`, the REPL parses and attempts to
+; execute each line independently rather than accumulating multi-line
+; input the way raprunner's file loader does. A multi-line defrel
+; here will fail with "unexpected end of input" partway through.
+; (raprunner's own file loading does not have this restriction —
+; this constraint is specific to feeding the REPL via stdin.)
+;
+; These header comments are deliberately placed at the END of the
+; file, not the top: the REPL's stdin accumulator joins lines with a
+; single space rather than a newline, and a standalone comment line
+; never triggers its own dispatch — so any comment-only line placed
+; before code gets bundled together with that code into one parse,
+; and the comment's "skip to newline" logic then has no newline left
+; to find and swallows everything after it, including the real code.
+; Comments placed after all definitions are never dispatched at all
+; (the accumulator is simply dropped at EOF), so they are safe here.
+;
+; Usage: ./repl < examples/memory_stage0.rap
+; (stdlib/core.rap loads automatically before this file's contents)
+;
+; CORRECTED relative to memory_stage1.rap: the recursive call in the
+; match branch of find-matches-foro-helper is now correctly nested
+; INSIDE its (conj ...) as the last step, not left outside it as a
+; stray sibling to the disj due to a misplaced closing paren.
