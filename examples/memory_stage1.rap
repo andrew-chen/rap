@@ -1,0 +1,91 @@
+; memory_stage1.rap — Stage 1: solve a fully-known board, no hidden
+; information, no agenda involvement at all. This stage exists purely
+; to settle the board/position/value representation that later stages
+; will reuse unchanged.
+;
+; Board representation: a list of (position . value) pairs.
+; position: integer 0-15. value: symbol a-h, each value appears at
+; exactly two positions in a valid board.
+;
+; Run with: ./raprunner memory_stage1.rap < /dev/null
+; (no input handling needed yet — this stage is a single query)
+
+; valueato: given a board and a position, look up the value there.
+; Fails if the position isn't in the board at all.
+(defrel (valueato board pos val)
+  (fresh (rest p v)
+    (== board ((p . v) . rest))
+    (disj
+      (conj (== p pos) (== v val))
+      (valueato rest pos val))))
+
+; matchingo: two DISTINCT positions hold the same value on this board.
+(defrel (matchingo board pos1 pos2)
+  (fresh (v)
+    (=/= pos1 pos2)
+    (valueato board pos1 v)
+    (valueato board pos2 v)))
+
+; all-positionso: the list of all 16 position integers, 0 through 15,
+; in order. Used as the search space for finding pairs.
+(defrel (all-positionso positions)
+  (== positions (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)))
+
+; find-pairso: given a board and a list of remaining candidate
+; positions to consider as the "first" element of a pair, find every
+; matching pair where pos1 comes before pos2 in standard order (so
+; each pair is reported exactly once, not twice in both orders).
+(defrel (find-pairso board candidates pairs)
+  (disj
+    (conj (== candidates ()) (== pairs ()))
+    (fresh (pos1 rest found-here found-rest)
+      (conj
+        (== candidates (pos1 . rest))
+        (find-matches-foro board pos1 rest found-here)
+        (find-pairso board rest found-rest)
+        (appendo found-here found-rest pairs)))))
+
+; find-matches-foro: given a board, a fixed position, and a list of
+; later candidate positions, find every later position that matches
+; the fixed one. Each match is reported as (pos1 . pos2).
+(defrel (find-matches-foro board pos1 later-candidates matches)
+  (disj
+    (conj (== later-candidates ()) (== matches ()))
+    (fresh (pos2 rest rest-matches)
+      (conj
+        (== later-candidates (pos2 . rest))
+        (disj
+          (conj
+            (matchingo board pos1 pos2)
+            (find-matches-foro board pos1 rest rest-matches)
+            (== matches ((pos1 . pos2) . rest-matches)))
+          (conj
+            (fresh (v1 v2)
+              (conj
+                (valueato board pos1 v1)
+                (valueato board pos2 v2)
+                (=/= v1 v2)))
+            (find-matches-foro board pos1 rest matches)))))))
+
+; solveo: top-level relation for this stage. Given a fully-known
+; board, find all matching pairs.
+(defrel (solveo board pairs)
+  (fresh (positions)
+    (conj
+      (all-positionso positions)
+      (find-pairso board positions pairs))))
+
+(defrel (main args ops)
+  (fresh (board pairs)
+    (conj
+      (== board
+          ((0 . a) (1 . b) (2 . c) (3 . d)
+           (4 . e) (5 . f) (6 . g) (7 . h)
+           (8 . a) (9 . b) (10 . c) (11 . d)
+           (12 . e) (13 . f) (14 . g) (15 . h)))
+      (solveo board pairs)
+      (call cons-ops (output (pairs pairs)) (no-ops) ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
+

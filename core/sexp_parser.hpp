@@ -156,7 +156,10 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
 
   auto push_frame = [&]() -> bool {
     ListFrame* f = a.make<ListFrame>();
-    if (!f) return false;
+    if (!f) {
+        std::fprintf(stderr, "[parse_sexp] push_frame: arena OOM\n");
+        return false;
+    };
     f->head = nullptr; f->tail = nullptr;
     f->seen_dot = false; f->dotted = nullptr;
     f->prev = frame; frame = f;
@@ -171,7 +174,10 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
       return reinterpret_cast<const Sexp*>(1);
     }
     SexpCell* c = make_cell(a, node);
-    if (!c) return nullptr;
+    if (!c) {
+        std::fprintf(stderr, "[parse_sexp] make_cell: arena OOM\n");
+        return nullptr;
+    };
     if (!frame->head) frame->head = c;
     if (frame->tail) const_cast<SexpCell*>(frame->tail)->cdr = c;
     frame->tail = c;
@@ -179,15 +185,25 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
   };
 
   while (true) {
+    printf("tok.tag is %hhu\n",tok.tag);
     switch (tok.tag) {
       case TokTag::LParen:
-        if (!push_frame()) return nullptr;
+        if (!push_frame()) {
+            std::fprintf(stderr, "[parse_sexp] TokTag::LParen push_frame: arena OOM\n");
+            return nullptr;
+        };
         tok = lx.next();
         break;
 
       case TokTag::RParen: {
-        if (!frame) return nullptr;
-        if (frame->seen_dot && !frame->dotted) return nullptr;
+        if (!frame) {
+            std::fprintf(stderr, "[parse_sexp] TokTag::RParen frame: !frame\n");
+            return nullptr;
+        };
+        if (frame->seen_dot && !frame->dotted) {
+            std::fprintf(stderr, "[parse_sexp] TokTag::RParen frame->seen_dot && !frame->dotted\n");
+            return nullptr;
+        };
         const Sexp* list = make_sexp_list(a, frame->head,
                                           frame->seen_dot ? frame->dotted : nullptr);
         frame = frame->prev;
@@ -205,7 +221,10 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
 
       case TokTag::Int: {
         const Sexp* node = make_sexp_int(a, tok.ival);
-        if (!node) return nullptr;
+        if (!node) {
+            std::fprintf(stderr, "[parse_sexp] TokTag::Int !node\n");
+            return nullptr;
+        };
         tok = lx.next();
         const Sexp* r = emit(node);
         if (r == reinterpret_cast<const Sexp*>(1)) break;
@@ -214,9 +233,15 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
 
       case TokTag::Sym: {
         const SymEntry* se = intern_sym(a, in, tok.start, tok.len);
-        if (!se) return nullptr;
+        if (!se) {
+            std::fprintf(stderr, "[parse_sexp] TokTag::Sym !se\n");
+            return nullptr;
+        };
         const Sexp* node = make_sexp_sym(a, se);
-        if (!node) return nullptr;
+        if (!node) {
+            std::fprintf(stderr, "[parse_sexp] TokTag::Sym !node\n");
+            return nullptr;
+        };
         tok = lx.next();
         const Sexp* r = emit(node);
         if (r == reinterpret_cast<const Sexp*>(1)) break;
@@ -225,6 +250,7 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
 
       case TokTag::End:
       default:
+        std::fprintf(stderr, "[parse_sexp] TokTag::End or default\n");
         return nullptr;
     }
   }
