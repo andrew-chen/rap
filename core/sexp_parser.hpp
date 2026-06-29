@@ -1306,3 +1306,24 @@ inline void print_query(const ParsedQuery& pq) {
   std::printf("\n");
   std::printf("==============================\n\n");
 }
+
+// Print a compiled relation body — used by --verbose in the REPL and raprunner.
+// name may be nullptr (prints "<anonymous>"). param_count is the arity.
+inline void print_rel_body(const char* name, std::uint32_t param_count,
+                           const Goal* body) {
+  std::printf("=== defrel: %s/%u ===\n",
+              name ? name : "<anonymous>", param_count);
+  std::printf("Body:\n  ");
+  if (body) print_goal(body, 2);
+  else      std::printf("<null>");
+  std::printf("\n");
+  std::printf("==============================\n\n");
+}
+
+// Print used/total bytes for an arena in a consistent one-line format.
+// label should be a short descriptive name, e.g. "intern_arena".
+inline void print_arena_usage(const char* label, const Arena& a) {
+  std::size_t used  = static_cast<std::size_t>(a.cur  - a.base);
+  std::size_t total = static_cast<std::size_t>(a.end  - a.base);
+  std::printf("[arena] %-20s %6zu / %6zu bytes\n", label, used, total);
+}

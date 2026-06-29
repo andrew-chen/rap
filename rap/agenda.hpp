@@ -103,20 +103,6 @@ struct Agenda {
         return false;
     }
 
-    void debug_print_agenda() const {
-        std::uint32_t pos = tail;
-	if (0 == count) printf("no items in agenda\n");
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(buf + pos);
-            if (e->args.tag == TermTag::Nil) {
-		printf("for runnable item %d id is %d\n",i,e->id);
-	    } else {
-		printf("for not runnable item %d id is %d\n",i,e->id);
-            }; 
-            pos += e->byte_size;
-        }
-    }
-
     // Dequeue the first runnable entry (args == nil), skipping state-holders.
     bool dequeue_runnable(QueryEntry& out) {
         if (count == 0) return false;

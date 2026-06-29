@@ -81,6 +81,11 @@ static void dispatch(const std::string& src,
     ParsedQuery pq = parse_query(query_arena, intern_arena, src.c_str(),
                                  sess_intern, sess_rel_env);
 
+    if (verbose) {
+        print_arena_usage("query_arena (parse)", query_arena);
+        print_arena_usage("intern_arena",        intern_arena);
+    }
+
     // Distinguish outcomes:
     //   goal==nullptr && rel_env.head==nullptr  →  parse error (already printed)
     //   goal==nullptr && rel_env.head!=nullptr  →  defrel-only, success
@@ -98,15 +103,30 @@ static void dispatch(const std::string& src,
     // Defrel-only path (pq.n == 0)
     if (pq.n == 0) {
         merge_rel_env(intern_arena, sess_intern, sess_rel_env, pq.rel_env);
-        // Print confirmation for each newly defined relation.
-        for (const RelEnvEntry* e = pq.rel_env.head; e; e = e->next)
+        for (const RelEnvEntry* e = pq.rel_env.head; e; e = e->next) {
             std::printf("defined: %s\n", e->name->str);
+            if (verbose) {
+                // Lookup the freshly merged stable copy (in intern_arena).
+                Term stable = sess_rel_env.lookup(e->name);
+                if (stable.tag == TermTag::Rel && stable.rel)
+                    print_rel_body(e->name->str, stable.rel->param_count,
+                                   stable.rel->body);
+            }
+        }
         return;
     }
 
     // If the input also had defrels before the run form, merge them first.
     if (pq.rel_env.head) {
         merge_rel_env(intern_arena, sess_intern, sess_rel_env, pq.rel_env);
+        if (verbose) {
+            for (const RelEnvEntry* e = pq.rel_env.head; e; e = e->next) {
+                Term stable = sess_rel_env.lookup(e->name);
+                if (stable.tag == TermTag::Rel && stable.rel)
+                    print_rel_body(e->name->str, stable.rel->param_count,
+                                   stable.rel->body);
+            }
+        }
     }
 
     // Run the query using query_arena for evaluator working storage.
@@ -124,6 +144,11 @@ static void dispatch(const std::string& src,
               });
 
     auto t1 = std::chrono::high_resolution_clock::now();
+
+    if (verbose) {
+        print_arena_usage("query_arena (run)", query_arena);
+        print_arena_usage("intern_arena",      intern_arena);
+    }
 
     if (count == 0) std::printf("(no solutions)\n");
 

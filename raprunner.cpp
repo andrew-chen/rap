@@ -58,7 +58,6 @@ alignas(64) static std::uint8_t wrap_buf[64 * 1024];
 static void apply_changeset(const ChangeSet& cs,
                             Agenda& agenda,
                             Arena&  intern_arena) {
-    //printf("cs.op_count at the start of apply_changeset is %d\n",cs.op_count);
     for (std::uint32_t i = 0; i < cs.op_count; ++i) {
         const Op& op = cs.ops[i];
         switch (op.tag) {
@@ -88,14 +87,10 @@ static void run_one(RapEvaluator& evaluator,
                     SpineArena&   spine,
                     RelEnv&       rel_env,
                     Arena&        eval_arena,
-                    Arena&        intern_arena) {
+                    Arena&        intern_arena,
+                    bool          verbose = false) {
     QueryEntry entry;
-    if (!agenda.dequeue_runnable(entry)) {
-	//printf("dequeue_runnable was false, so returning\n");
-	return;
-    } else {
-	//printf("dequeue_runnable returned true, so continuing\n");
-    }
+    if (!agenda.dequeue_runnable(entry)) return;
 
     // Build agenda list term from remaining entries.
     spine.reset();
@@ -130,6 +125,11 @@ static void run_one(RapEvaluator& evaluator,
     ChangeSet* cs = evaluator.get_changeset();
     if (cs) apply_changeset(*cs, agenda, intern_arena);
 
+    if (verbose) {
+        print_arena_usage("eval_arena (run)",  eval_arena);
+        print_arena_usage("intern_arena",      intern_arena);
+    }
+
     eval_arena.reset();
 }
 
@@ -143,7 +143,8 @@ static bool call_main(RapEvaluator& evaluator,
                       Agenda&       agenda,
                       RelEnv&       rel_env,
                       Arena&        eval_arena,
-                      Arena&        intern_arena) {
+                      Arena&        intern_arena,
+                      bool          verbose = false) {
     evaluator.init_changeset();
 
     // Build: (call main-rel args-term var(0))
@@ -172,6 +173,11 @@ static bool call_main(RapEvaluator& evaluator,
 
     ChangeSet* cs = evaluator.get_changeset();
     if (cs) apply_changeset(*cs, agenda, intern_arena);
+
+    if (verbose) {
+        print_arena_usage("eval_arena (main)", eval_arena);
+        print_arena_usage("intern_arena",      intern_arena);
+    }
 
     eval_arena.reset();
     return true;
@@ -294,7 +300,8 @@ static bool load_program(const char*  path,
                          Arena&       prog_arena,
                          Arena&       intern_arena,
                          Intern&      sess_intern,
-                         RelEnv&      rel_env) {
+                         RelEnv&      rel_env,
+                         bool         verbose = false) {
     FILE* f = std::fopen(path, "r");
     if (!f) {
         std::fprintf(stderr, "raprunner: cannot open '%s': %s\n",
@@ -324,6 +331,11 @@ static bool load_program(const char*  path,
     // Parse into prog_arena (temporaries) and intern_arena (SymEntries).
     ParsedQuery pq = parse_query(prog_arena, intern_arena, src.data(), sess_intern, rel_env);
 
+    if (verbose) {
+        print_arena_usage("prog_arena (parse)",  prog_arena);
+        print_arena_usage("intern_arena",         intern_arena);
+    }
+
     if (pq.goal != nullptr) {
         std::fprintf(stderr, "raprunner: program file must contain only defrel forms\n");
         return false;
@@ -344,6 +356,8 @@ static bool load_program(const char*  path,
         rn->param_count = e->rel_term.rel->param_count;
         rn->body        = body_copy;
         rel_env.define(prog_arena, e->name, Term::relation(rn));
+        if (verbose)
+            print_rel_body(e->name->str, rn->param_count, rn->body);
     }
 
     return true;
@@ -353,7 +367,8 @@ static bool load_program(const char*  path,
 // ============================================================================
 // load_stdlib: load stdlib/core.rap from $RAP_STDLIB or relative to cwd
 // ============================================================================
-static void load_stdlib(Arena& prog_arena, Arena& intern_arena, Intern& intern, RelEnv& rel_env) {
+static void load_stdlib(Arena& prog_arena, Arena& intern_arena, Intern& intern,
+                        RelEnv& rel_env, bool verbose = false) {
     const char* env_path = std::getenv("RAP_STDLIB");
     std::vector<std::string> candidates;
     if (env_path) candidates.push_back(env_path);
@@ -363,7 +378,7 @@ static void load_stdlib(Arena& prog_arena, Arena& intern_arena, Intern& intern, 
         FILE* f = std::fopen(path.c_str(), "r");
         if (!f) continue;
         std::fclose(f);
-        if (!load_program(path.c_str(), prog_arena, intern_arena, intern, rel_env))
+        if (!load_program(path.c_str(), prog_arena, intern_arena, intern, rel_env, verbose))
             std::fprintf(stderr, "raprunner: warning: failed to load stdlib '%s'\n",
                          path.c_str());
         return;
@@ -384,11 +399,14 @@ int main(int argc, char** argv) {
 
     // ---- Parse command line ------------------------------------------------
     const char* program_file = argv[1];
+    bool verbose = false;
     std::vector<const char*> user_args;
     std::vector<int> extra_fds;
 
     for (int i = 2; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--fd") == 0) {
+        if (std::strcmp(argv[i], "--verbose") == 0) {
+            verbose = true;
+        } else if (std::strcmp(argv[i], "--fd") == 0) {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "raprunner: --fd requires an argument\n");
                 return 1;
@@ -434,8 +452,13 @@ int main(int argc, char** argv) {
 
     // ---- Load stdlib then program file -------------------------------------
     RelEnv rel_env{};
-    load_stdlib(prog_arena, intern_arena, intern, rel_env);
-    if (!load_program(program_file, prog_arena, intern_arena, intern, rel_env)) return 1;
+    load_stdlib(prog_arena, intern_arena, intern, rel_env, verbose);
+    if (!load_program(program_file, prog_arena, intern_arena, intern, rel_env, verbose)) return 1;
+    if (verbose) {
+        print_arena_usage("prog_arena",   prog_arena);
+        print_arena_usage("intern_arena", intern_arena);
+        print_arena_usage("rap_arena",    rap_arena);
+    }
 
     // ---- Check entry points ------------------------------------------------
     const SymEntry* main_sym =
@@ -475,7 +498,7 @@ int main(int argc, char** argv) {
 
     // ---- Call main ---------------------------------------------------------
     if (!call_main(*evaluator, main_rel, args_term, agenda, rel_env,
-                   eval_arena, intern_arena)) {
+                   eval_arena, intern_arena, verbose)) {
         return 1;
     }
 
@@ -487,16 +510,12 @@ int main(int argc, char** argv) {
 
     while (true) {
         // Run agenda until no Rel items remain (data items may stay).
-	//printf("agenda has the following number of items %d \n",agenda.count);
-	// agenda.debug_print_agenda();
         if (agenda.has_runnable()) {
             run_one(*evaluator, agenda, spine, rel_env,
-                    eval_arena, intern_arena);
-	    //agenda.debug_print_agenda();
-	} else {
-
-		// No Rel items remain. Reset wrap_arena — all wrappers have executed.
-		wrap_arena.reset();
+                    eval_arena, intern_arena, verbose);
+        } else {
+            // No Rel items remain. Reset wrap_arena — all wrappers have executed.
+            wrap_arena.reset();
 
 		// Exit if no fds remain.
 		if (watched_fds.empty()) break;
@@ -512,7 +531,6 @@ int main(int argc, char** argv) {
             pfds.push_back(pfd);
         }
 
-        // int ret = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), -1);
         int ret = poll(pfds.data(), static_cast<nfds_t>(pfds.size()), 1);
         if (ret < 0) {
             std::fprintf(stderr, "raprunner: poll error: %s\n",
@@ -530,14 +548,12 @@ int main(int argc, char** argv) {
                 char block[4096];
                 ssize_t n = read(fd, block, sizeof(block));
                 if (n == 0) {
-		    //printf("enqueuing an EOF\n");
                     // EOF: send empty list as input, then drop fd.
                     enqueue_handle_input(wrap_arena, agenda, spine, rel_env,
                                         intern_arena, intern,
                                         handle_input_rel, fd, Term::nil());
                     fds_to_remove.push_back(fd);
                 } else if (n > 0) {
-		    //printf("enqueuing regular characters (not EOF)\n");
                     Term input_term = build_char_list(wrap_arena, intern_arena,
                                                      intern, block, n);
                     enqueue_handle_input(wrap_arena, agenda, spine, rel_env,

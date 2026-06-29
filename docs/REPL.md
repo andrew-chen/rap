@@ -1,10 +1,10 @@
-# REPL Specification: Interactive Query Shell
+# REPL: Interactive Query Shell
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Depends on:** Stage DISEQ complete (core/ with =/=)  
-**New file:** `repl.cpp`  
-**Status:** Specification — not yet implemented  
-**Date:** May 2026
+**File:** `repl.cpp`  
+**Status:** Implemented  
+**Date:** May 2026 (updated June 2026)
 
 ---
 
@@ -18,7 +18,7 @@ When complete:
 
 ```bash
 ./repl                          # interactive
-./repl --verbose                # show parsed goal tree before running
+./repl --verbose                # show compiled goal trees, defrel bodies, and arena usage
 ./repl --timing                 # print µs per query after each result
 ./repl --verbose --timing       # both
 ./repl < examples/appendo.rkt   # scripted via redirection
@@ -46,8 +46,10 @@ rap>
 **Scripted mode** (stdin is not a tty): no prompt, same output otherwise.
 Detection via `isatty(STDIN_FILENO)`.
 
-**`--verbose` adds** the parsed goal tree after each query parses, before
-running. Uses the existing `print_query(pq)` machinery.
+**`--verbose` adds:**
+- Arena usage (`[arena] name: used / total bytes`) after every `parse_query` call and after every `runN` call.
+- The compiled goal tree for each `run` form (via `print_query`), before running.
+- The compiled relation body (param count + Goal tree via `print_rel_body`) for every `defrel` defined in that dispatch call, printed immediately after "defined: name".
 
 **`--timing` adds** a line after each query's results:
 

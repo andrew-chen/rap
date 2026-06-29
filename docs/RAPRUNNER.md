@@ -1,10 +1,10 @@
-# raprunner Specification: Reactive RAP Program Runner
+# raprunner: Reactive RAP Program Runner
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Depends on:** Stage 2 complete (rap/loop.hpp, rap/agenda.hpp, etc.)  
-**New file:** `raprunner.cpp`  
-**Status:** Specification — not yet implemented  
-**Date:** May 2026
+**File:** `raprunner.cpp`  
+**Status:** Implemented  
+**Date:** May 2026 (updated June 2026)
 
 ---
 
@@ -25,7 +25,12 @@ queries including pending input queries before they ever execute.
 raprunner program.rap                    # stdin only
 raprunner program.rap arg1 arg2          # CLI args passed to main
 raprunner program.rap --fd 4 --fd 7      # watch additional fds
+raprunner program.rap --verbose          # show defrel bodies, arena usage per query
 ```
+
+**`--verbose`** prints:
+- Arena usage (`[arena] name: used / total bytes`) after loading stdlib, after loading the program file, and after each query run (`run_one`, `call_main`).
+- The compiled relation body (param count + Goal tree) for every `defrel` loaded from stdlib or the program file.
 
 ---
 
