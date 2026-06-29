@@ -22,7 +22,7 @@ static int failed = 0;
 static Term parse_term(RapLoop& loop, Arena& tmp, const char* str) {
     Lexer lx{str};
     Token tok = lx.next();
-    const Sexp* sx = parse_sexp(tmp, loop.intern, lx, tok);
+    const Sexp* sx = parse_sexp(tmp, loop.intern_arena, loop.intern, lx, tok);
     if (!sx) return Term::nil();
     return compile_term(tmp, nullptr, nullptr, sx);
 }

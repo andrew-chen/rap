@@ -151,7 +151,9 @@ inline void print_sexp(const Sexp* x) {
 }
 
 // Iterative parse of exactly one s-expression.
-inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
+// a     — arena for Sexp/SexpCell/ListFrame temporaries (may be a scratch arena)
+// sym_a — arena for SymEntry allocations (must be permanent; usually intern_arena)
+inline const Sexp* parse_sexp(Arena& a, Arena& sym_a, Intern& in, Lexer& lx, Token& tok) {
   ListFrame* frame = nullptr;
 
   auto push_frame = [&]() -> bool {
@@ -185,7 +187,6 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
   };
 
   while (true) {
-    printf("tok.tag is %hhu\n",tok.tag);
     switch (tok.tag) {
       case TokTag::LParen:
         if (!push_frame()) {
@@ -232,7 +233,7 @@ inline const Sexp* parse_sexp(Arena& a, Intern& in, Lexer& lx, Token& tok) {
       }
 
       case TokTag::Sym: {
-        const SymEntry* se = intern_sym(a, in, tok.start, tok.len);
+        const SymEntry* se = intern_sym(sym_a, in, tok.start, tok.len);
         if (!se) {
             std::fprintf(stderr, "[parse_sexp] TokTag::Sym !se\n");
             return nullptr;
@@ -746,7 +747,7 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
 
   // Multi-form loop: defrel* then run (or goal-only for backward compat)
   while (tok.tag != TokTag::End) {
-    const Sexp* top = parse_sexp(a, out.intern, lx, tok);
+    const Sexp* top = parse_sexp(a, a, out.intern, lx, tok);
     if (!top) {
       std::printf("[parse_query] ERROR: parse_sexp failed — malformed s-expression\n");
       std::printf("[parse_query] Source: %s\n", src);
@@ -941,10 +942,14 @@ inline ParsedQuery parse_query(Arena& a, const char* src) {
 // symbol table is shared.  New defrels are returned in pq.rel_env (empty base).
 // The caller is responsible for merging pq.rel_env into the session rel_env.
 //
-// IMPORTANT: pass intern_arena (not query_arena) as 'a' so that any newly
-// interned SymEntry objects survive query_arena resets.
+// a     — scratch arena for parse temporaries (Sexp nodes, Goal trees, etc.);
+//          may be query_arena (reset between calls). Nothing allocated here
+//          needs to outlive the current dispatch call.
+// sym_a — arena for SymEntry allocations; must be permanent (intern_arena).
+//          SymEntry pointers are used for pointer-identity equality checks
+//          across the lifetime of the session, so they must never be freed.
 // ============================================================================
-inline ParsedQuery parse_query(Arena& a, const char* src,
+inline ParsedQuery parse_query(Arena& a, Arena& sym_a, const char* src,
                                Intern& sess_intern,
                                const RelEnv& sess_rel_env) {
   ParsedQuery out{};
@@ -952,14 +957,14 @@ inline ParsedQuery parse_query(Arena& a, const char* src,
   out.qvar      = Term::nil();
   out.vars_used = 0;
   out.goal      = nullptr;
-  // Share the caller's intern table — new symbols are interned into 'a'.
+  // Share the caller's intern table — new SymEntries go into sym_a.
   out.intern    = sess_intern;
 
-  // Intern outcome symbols (no-ops if already present).
-  out.outcome_syms.s_true         = intern_cstr(a, out.intern, "true");
-  out.outcome_syms.s_false        = intern_cstr(a, out.intern, "false");
-  out.outcome_syms.s_insufficient = intern_cstr(a, out.intern, "insufficient");
-  out.outcome_syms.s_bounded      = intern_cstr(a, out.intern, "bounded");
+  // Intern outcome symbols (no-ops if already present in the shared table).
+  out.outcome_syms.s_true         = intern_cstr(sym_a, out.intern, "true");
+  out.outcome_syms.s_false        = intern_cstr(sym_a, out.intern, "false");
+  out.outcome_syms.s_insufficient = intern_cstr(sym_a, out.intern, "insufficient");
+  out.outcome_syms.s_bounded      = intern_cstr(sym_a, out.intern, "bounded");
   if (!out.outcome_syms.s_true || !out.outcome_syms.s_false ||
       !out.outcome_syms.s_insufficient || !out.outcome_syms.s_bounded) {
     std::printf("[parse_query] ERROR: failed to intern outcome symbols (OOM?)\n");
@@ -980,7 +985,7 @@ inline ParsedQuery parse_query(Arena& a, const char* src,
   Token tok = lx.next();
 
   while (tok.tag != TokTag::End) {
-    const Sexp* top = parse_sexp(a, out.intern, lx, tok);
+    const Sexp* top = parse_sexp(a, sym_a, out.intern, lx, tok);
     if (!top) {
       std::printf("[parse_query] ERROR: parse_sexp failed — malformed s-expression\n");
       std::printf("[parse_query] Source: %s\n", src);
@@ -1152,7 +1157,7 @@ inline ParsedQuery parse_query(Arena& a, const char* src,
 
     // goal-only form (backward compat)
     {
-      const SymEntry* qsym = intern_cstr(a, out.intern, "q");
+      const SymEntry* qsym = intern_cstr(sym_a, out.intern, "q");
       const GlobalBind* genv = global_add(a, nullptr, qsym, 0);
       out.goal = compile_goal(a, genv, nullptr, top);
       if (!out.goal)

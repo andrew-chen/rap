@@ -78,7 +78,7 @@ static void dispatch(const std::string& src,
 
     // Parse into intern_arena so all newly-created SymEntries are stable
     // across subsequent query_arena resets.
-    ParsedQuery pq = parse_query(intern_arena, src.c_str(),
+    ParsedQuery pq = parse_query(query_arena, intern_arena, src.c_str(),
                                  sess_intern, sess_rel_env);
 
     // Distinguish outcomes:

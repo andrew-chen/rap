@@ -102,7 +102,7 @@ struct RapLoop {
         bool any = false;
 
         while (tok.tag != TokTag::End && tok.tag != TokTag::Error) {
-            const Sexp* top = parse_sexp(intern_arena, intern, lx, tok);
+            const Sexp* top = parse_sexp(intern_arena, intern_arena, intern, lx, tok);
             if (!top) break;
 
             // Only process defrel forms; skip anything else.

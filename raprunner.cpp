@@ -292,6 +292,7 @@ static void enqueue_handle_input(Arena&      wrap_arena,
 // ============================================================================
 static bool load_program(const char*  path,
                          Arena&       prog_arena,
+                         Arena&       intern_arena,
                          Intern&      sess_intern,
                          RelEnv&      rel_env) {
     FILE* f = std::fopen(path, "r");
@@ -320,8 +321,8 @@ static bool load_program(const char*  path,
     }
     std::fclose(f);
 
-    // Parse all defrel forms.  Use prog_arena so goal trees are permanent.
-    ParsedQuery pq = parse_query(prog_arena, src.data(), sess_intern, rel_env);
+    // Parse into prog_arena (temporaries) and intern_arena (SymEntries).
+    ParsedQuery pq = parse_query(prog_arena, intern_arena, src.data(), sess_intern, rel_env);
 
     if (pq.goal != nullptr) {
         std::fprintf(stderr, "raprunner: program file must contain only defrel forms\n");
@@ -352,7 +353,7 @@ static bool load_program(const char*  path,
 // ============================================================================
 // load_stdlib: load stdlib/core.rap from $RAP_STDLIB or relative to cwd
 // ============================================================================
-static void load_stdlib(Arena& prog_arena, Intern& intern, RelEnv& rel_env) {
+static void load_stdlib(Arena& prog_arena, Arena& intern_arena, Intern& intern, RelEnv& rel_env) {
     const char* env_path = std::getenv("RAP_STDLIB");
     std::vector<std::string> candidates;
     if (env_path) candidates.push_back(env_path);
@@ -362,7 +363,7 @@ static void load_stdlib(Arena& prog_arena, Intern& intern, RelEnv& rel_env) {
         FILE* f = std::fopen(path.c_str(), "r");
         if (!f) continue;
         std::fclose(f);
-        if (!load_program(path.c_str(), prog_arena, intern, rel_env))
+        if (!load_program(path.c_str(), prog_arena, intern_arena, intern, rel_env))
             std::fprintf(stderr, "raprunner: warning: failed to load stdlib '%s'\n",
                          path.c_str());
         return;
@@ -433,8 +434,8 @@ int main(int argc, char** argv) {
 
     // ---- Load stdlib then program file -------------------------------------
     RelEnv rel_env{};
-    load_stdlib(prog_arena, intern, rel_env);
-    if (!load_program(program_file, prog_arena, intern, rel_env)) return 1;
+    load_stdlib(prog_arena, intern_arena, intern, rel_env);
+    if (!load_program(program_file, prog_arena, intern_arena, intern, rel_env)) return 1;
 
     // ---- Check entry points ------------------------------------------------
     const SymEntry* main_sym =
