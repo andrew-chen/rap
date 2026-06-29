@@ -11,7 +11,7 @@
 #include <new>
 
 constexpr std::uint32_t MAX_OUTPUT_TERMS = 256;
-constexpr std::uint32_t EVAL_ARENA_SIZE  = 128 * 1024;  // 128 KiB per query
+constexpr std::uint32_t EVAL_ARENA_SIZE  = 1024 * 1024 * 1024;  
 
 // ============================================================================
 // OutputQueue: collects Output ops during a query run.

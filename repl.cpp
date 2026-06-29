@@ -35,7 +35,7 @@ alignas(64) static std::uint8_t intern_buf[64 * 1024];
 
 // query_arena: per-query.  Reset at the start of each dispatch() call.
 // Holds Evaluator working storage (Work, Kont, Binding, etc.).
-alignas(64) static std::uint8_t query_buf[256 * 1024];
+alignas(64) static std::uint8_t query_buf[1024 * 1024];
 
 
 // ============================================================================

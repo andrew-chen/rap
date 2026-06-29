@@ -36,36 +36,48 @@
 ; matching pair where pos1 comes before pos2 in standard order (so
 ; each pair is reported exactly once, not twice in both orders).
 (defrel (find-pairso board candidates pairs)
+  (find-pairso-acc board candidates () pairs))
+
+(defrel (find-pairso-acc board candidates acc pairs)
   (disj
-    (conj (== candidates ()) (== pairs ()))
-    (fresh (pos1 rest found-here found-rest)
+    (conj (== candidates ()) (== pairs acc))
+    (fresh (pos1 rest found-here)
       (conj
         (== candidates (pos1 . rest))
         (find-matches-foro board pos1 rest found-here)
-        (find-pairso board rest found-rest)
-        (appendo found-here found-rest pairs)))))
+        (disj
+          (conj
+            (== found-here ())
+            (find-pairso-acc board rest acc pairs))
+          (fresh (the-pair)
+            (conj
+              (== found-here (the-pair . ()))
+              (find-pairso-acc board rest (the-pair . acc) pairs))))))))
 
 ; find-matches-foro: given a board, a fixed position, and a list of
 ; later candidate positions, find every later position that matches
 ; the fixed one. Each match is reported as (pos1 . pos2).
 (defrel (find-matches-foro board pos1 later-candidates matches)
+  (fresh (v1)
+    (conj
+      (valueato board pos1 v1)
+      (find-matches-foro-helper board pos1 v1 later-candidates matches))))
+
+(defrel (find-matches-foro-helper board pos1 v1 later-candidates matches)
   (disj
     (conj (== later-candidates ()) (== matches ()))
-    (fresh (pos2 rest rest-matches)
+    (fresh (pos2 rest rest-matches v2)
       (conj
         (== later-candidates (pos2 . rest))
+        (valueato board pos2 v2)
         (disj
           (conj
-            (matchingo board pos1 pos2)
-            (find-matches-foro board pos1 rest rest-matches)
+            (== v1 v2)
             (== matches ((pos1 . pos2) . rest-matches)))
+            (find-matches-foro-helper board pos1 v1 rest rest-matches)
           (conj
-            (fresh (v1 v2)
-              (conj
-                (valueato board pos1 v1)
-                (valueato board pos2 v2)
-                (=/= v1 v2)))
-            (find-matches-foro board pos1 rest matches)))))))
+            (=/= v1 v2)
+            (find-matches-foro-helper board pos1 v1 rest matches)))))))
 
 ; solveo: top-level relation for this stage. Given a fully-known
 ; board, find all matching pairs.
@@ -84,7 +96,7 @@
            (8 . a) (9 . b) (10 . c) (11 . d)
            (12 . e) (13 . f) (14 . g) (15 . h)))
       (solveo board pairs)
-      (call cons-ops (output (pairs pairs)) (no-ops) ops))))
+      (call cons-ops (output (found-pairs pairs)) (no-ops) ops))))
 
 (defrel (handle_input agenda fd input ops)
   (call no-ops ops))
