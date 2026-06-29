@@ -73,8 +73,8 @@
         (disj
           (conj
             (== v1 v2)
-            (== matches ((pos1 . pos2) . rest-matches)))
-            (find-matches-foro-helper board pos1 v1 rest rest-matches)
+            (== matches ((pos1 . pos2) . rest-matches))
+            (find-matches-foro-helper board pos1 v1 rest rest-matches))
           (conj
             (=/= v1 v2)
             (find-matches-foro-helper board pos1 v1 rest matches)))))))
