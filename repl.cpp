@@ -133,6 +133,7 @@ static void dispatch(const std::string& src,
     // The eval was constructed with &query_arena; runN uses it internally.
     auto t0 = std::chrono::high_resolution_clock::now();
     int  count = 0;
+    bool oom   = false;
 
     eval.runN(pq.n, pq.goal, pq.qvar, pq.vars_used,
               sess_rel_env,
@@ -141,7 +142,8 @@ static void dispatch(const std::string& src,
                   print_term(ans);
                   std::printf("\n");
                   ++count;
-              });
+              },
+              &oom);
 
     auto t1 = std::chrono::high_resolution_clock::now();
 
@@ -149,6 +151,10 @@ static void dispatch(const std::string& src,
         print_arena_usage("query_arena (run)", query_arena);
         print_arena_usage("intern_arena",      intern_arena);
     }
+
+    if (oom)
+        std::printf("WARNING: query execution ran out of memory (query_arena);"
+                    " results may be incomplete or wrong.\n");
 
     if (count == 0) std::printf("(no solutions)\n");
 

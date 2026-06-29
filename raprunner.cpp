@@ -116,8 +116,13 @@ static void run_one(RapEvaluator& evaluator,
                 call_goal->call = GoalCall{entry.query_term, call_args, nparams};
 
                 // vars_used = 2 always: reserves Var(1) for wrapper ops.
+                bool oom = false;
                 evaluator.runN(1, call_goal, Term::var(0), 2, rel_env,
-                               [](Term, State) {});
+                               [](Term, State) {}, &oom);
+                if (oom)
+                    std::fprintf(stderr,
+                        "WARNING: query execution ran out of memory (eval_arena);"
+                        " results may be incomplete or wrong.\n");
             }
         }
     }
@@ -162,8 +167,14 @@ static bool call_main(RapEvaluator& evaluator,
     call_goal->call = GoalCall{main_rel, call_args, 2};
 
     bool succeeded = false;
+    bool oom       = false;
     evaluator.runN(1, call_goal, Term::var(0), 1, rel_env,
-                   [&](Term, State) { succeeded = true; });
+                   [&](Term, State) { succeeded = true; }, &oom);
+
+    if (oom)
+        std::fprintf(stderr,
+            "WARNING: query execution ran out of memory (eval_arena);"
+            " results may be incomplete or wrong.\n");
 
     if (!succeeded) {
         std::fprintf(stderr, "raprunner: 'main' produced no solution\n");

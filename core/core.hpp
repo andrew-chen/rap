@@ -847,10 +847,13 @@ public:
   virtual ~Evaluator() = default;
 
   // Run up to n answers, calling on_answer(Term, State) for each solution.
+  // If oom_occurred is non-null, *oom_occurred is set to true when the loop
+  // terminates due to arena exhaustion rather than a legitimately empty queue.
   template<typename OnAnswer>
   void runN(int n, const Goal* goal, Term qvar,
             std::uint32_t vars_used, const RelEnv& rel_env,
-            OnAnswer&& on_answer);
+            OnAnswer&& on_answer,
+            bool* oom_occurred = nullptr);
 
   // 6-arg overload without rel_env (backward compat for callers that don't
   // have a RelEnv, e.g. pre-Stage-0A call sites in rap/).
@@ -1693,7 +1696,8 @@ inline Term reify_deep(Arena& a, Term t, const Binding* s, const RelEnv& rel_env
 template<typename OnAnswer>
 inline void Evaluator::runN(int n, const Goal* query_goal, Term query_var,
                              std::uint32_t vars_used, const RelEnv& rel_env,
-                             OnAnswer&& on_answer)
+                             OnAnswer&& on_answer,
+                             bool* oom_occurred)
 {
   Arena& a = *arena_;
   WorkQueue q;
@@ -1722,7 +1726,10 @@ inline void Evaluator::runN(int n, const Goal* query_goal, Term query_var,
       on_answer(ans, y);
       ++produced;
     }
-    if (StepResult::OOM == r) break;
+    if (StepResult::OOM == r) {
+      if (oom_occurred) *oom_occurred = true;
+      break;
+    }
   }
 }
 
