@@ -3,6 +3,9 @@
 #include "core.hpp"
 #include <cstdint>
 #include <cstdio>
+#include <map>
+#include <string>
+#include <vector>
 
 // ============================================================================
 // Tokenizer (no allocations) + iterative S-expression parser + compiler
@@ -1326,4 +1329,100 @@ inline void print_arena_usage(const char* label, const Arena& a) {
   std::size_t used  = static_cast<std::size_t>(a.cur  - a.base);
   std::size_t total = static_cast<std::size_t>(a.end  - a.base);
   std::printf("[arena] %-20s %6zu / %6zu bytes\n", label, used, total);
+}
+
+// ============================================================================
+// dump_oom_work_queue — OOM diagnostic, analogous to a stack trace.
+// Printed to stdout (consistent with print_goal/print_term) at the moment
+// StepResult::OOM is detected in runN's main loop.
+//
+// Covers:
+//   - Total count of pending Work items in the queue at that moment.
+//   - Breakdown by goal type / relation name where determinable.
+//   - A sample of the first 5 and last 5 items: goal + kont-chain depth.
+//
+// Relation-name attribution: for GoalTag::Call goals where the relation was
+// referenced by symbol (rel_term.tag == TermTag::Sym), the name is available
+// directly.  For anonymous rels (TermTag::Rel) or unresolved vars, we report
+// what is structurally determinable (arity, tag) rather than guessing.
+// ============================================================================
+inline void dump_oom_work_queue(const WorkQueue& q) {
+  // --- Collect all pending items (no modification to queue) ---
+  std::vector<const Work*> items;
+  for (const Work* w = q.head; w; w = w->next)
+    items.push_back(w);
+
+  std::printf("\n[oom-dump] %zu pending work items at arena exhaustion\n",
+              items.size());
+
+  // --- Kont depth helper ---
+  auto kont_depth = [](const Kont* k) -> int {
+    int d = 0;
+    while (k && k->tag != KontTag::Done) {
+      ++d;
+      if (k->tag == KontTag::Then) k = k->then_.next;
+      else                          k = k->restore_env_.next;
+    }
+    return d;
+  };
+
+  // --- Goal label helper: returns a string key for breakdown counting ---
+  auto goal_label = [](const Goal* g) -> std::string {
+    if (!g) return "<null>";
+    switch (g->tag) {
+      case GoalTag::Call:
+        if (g->call.rel_term.tag == TermTag::Sym && g->call.rel_term.sym)
+          return std::string(g->call.rel_term.sym->str);
+        if (g->call.rel_term.tag == TermTag::Rel)
+          return std::string("(anonymous-rel/") +
+                 std::to_string(g->call.arg_count) + ")";
+        return std::string("call(unresolved-") +
+               std::to_string(static_cast<int>(g->call.rel_term.tag)) + ")";
+      case GoalTag::Eq:    return "==";
+      case GoalTag::Diseq: return "=/=";
+      case GoalTag::Disj:  return "disj";
+      case GoalTag::Conj:  return "conj";
+      case GoalTag::Fresh: return "fresh";
+      case GoalTag::Probe: return "probe";
+      default:             return "?";
+    }
+  };
+
+  // --- Breakdown by label ---
+  std::map<std::string, int> counts;
+  for (const Work* w : items)
+    counts[goal_label(w->g)]++;
+
+  std::printf("[oom-dump] breakdown:\n");
+  for (const auto& [label, cnt] : counts)
+    std::printf("[oom-dump]   %5d  %s\n", cnt, label.c_str());
+
+  // --- Sample: first 5 and last 5 ---
+  constexpr std::size_t SAMPLE = 5;
+  std::size_t n = items.size();
+
+  auto print_item = [&](std::size_t idx) {
+    const Work* w = items[idx];
+    std::printf("[oom-dump]   [%zu] kont-depth=%d  goal: ",
+                idx, kont_depth(w->k));
+    print_goal(w->g, 0);
+    std::printf("\n");
+  };
+
+  std::printf("[oom-dump] first %zu item(s):\n", n < SAMPLE ? n : SAMPLE);
+  for (std::size_t i = 0; i < n && i < SAMPLE; ++i)
+    print_item(i);
+
+  if (n > 2 * SAMPLE) {
+    std::printf("[oom-dump] ... (%zu omitted) ...\n", n - 2 * SAMPLE);
+    std::printf("[oom-dump] last %zu items:\n", SAMPLE);
+    for (std::size_t i = n - SAMPLE; i < n; ++i)
+      print_item(i);
+  } else if (n > SAMPLE) {
+    std::printf("[oom-dump] last %zu item(s):\n", n - SAMPLE);
+    for (std::size_t i = SAMPLE; i < n; ++i)
+      print_item(i);
+  }
+
+  std::printf("[oom-dump] end\n\n");
 }

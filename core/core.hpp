@@ -723,6 +723,10 @@ struct WorkQueue {
   }
 };
 
+// Callback type for OOM diagnostics: receives the work queue at the moment
+// StepResult::OOM is detected.  Only called when OOM actually occurs.
+using OomDiagFn = void (*)(const WorkQueue&);
+
 inline StepResult apply_k_or_yield(Arena& a, WorkQueue& q, State st,
                                    const Kont* k, Work* reuse, State& yielded) {
   // RestoreEnv: adjust st.env to the saved caller env before continuing.
@@ -849,11 +853,14 @@ public:
   // Run up to n answers, calling on_answer(Term, State) for each solution.
   // If oom_occurred is non-null, *oom_occurred is set to true when the loop
   // terminates due to arena exhaustion rather than a legitimately empty queue.
+  // If oom_diag is non-null, it is called with the pending work queue at the
+  // moment OOM is detected, before breaking — use for diagnostic dumps.
   template<typename OnAnswer>
   void runN(int n, const Goal* goal, Term qvar,
             std::uint32_t vars_used, const RelEnv& rel_env,
             OnAnswer&& on_answer,
-            bool* oom_occurred = nullptr);
+            bool* oom_occurred = nullptr,
+            OomDiagFn oom_diag = nullptr);
 
   // 6-arg overload without rel_env (backward compat for callers that don't
   // have a RelEnv, e.g. pre-Stage-0A call sites in rap/).
@@ -1697,7 +1704,8 @@ template<typename OnAnswer>
 inline void Evaluator::runN(int n, const Goal* query_goal, Term query_var,
                              std::uint32_t vars_used, const RelEnv& rel_env,
                              OnAnswer&& on_answer,
-                             bool* oom_occurred)
+                             bool* oom_occurred,
+                             OomDiagFn oom_diag)
 {
   Arena& a = *arena_;
   WorkQueue q;
@@ -1728,6 +1736,7 @@ inline void Evaluator::runN(int n, const Goal* query_goal, Term query_var,
     }
     if (StepResult::OOM == r) {
       if (oom_occurred) *oom_occurred = true;
+      if (oom_diag) oom_diag(q);
       break;
     }
   }

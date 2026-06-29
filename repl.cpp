@@ -143,7 +143,7 @@ static void dispatch(const std::string& src,
                   std::printf("\n");
                   ++count;
               },
-              &oom);
+              &oom, dump_oom_work_queue);
 
     auto t1 = std::chrono::high_resolution_clock::now();
 

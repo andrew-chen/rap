@@ -118,7 +118,7 @@ static void run_one(RapEvaluator& evaluator,
                 // vars_used = 2 always: reserves Var(1) for wrapper ops.
                 bool oom = false;
                 evaluator.runN(1, call_goal, Term::var(0), 2, rel_env,
-                               [](Term, State) {}, &oom);
+                               [](Term, State) {}, &oom, dump_oom_work_queue);
                 if (oom)
                     std::fprintf(stderr,
                         "WARNING: query execution ran out of memory (eval_arena);"
@@ -169,7 +169,8 @@ static bool call_main(RapEvaluator& evaluator,
     bool succeeded = false;
     bool oom       = false;
     evaluator.runN(1, call_goal, Term::var(0), 1, rel_env,
-                   [&](Term, State) { succeeded = true; }, &oom);
+                   [&](Term, State) { succeeded = true; }, &oom,
+                   dump_oom_work_queue);
 
     if (oom)
         std::fprintf(stderr,
