@@ -132,63 +132,73 @@ this placement-news a `ChangeSet` at `client_region_.base` and sets
 backtracking.
 
 **Backtracking restore.** At the top of `Evaluator::step`
-(`core/core.hpp:1415`), before executing any goal:
+(`core/core.hpp:1422`), before executing any goal:
 
 ```cpp
-client_region_.restore(st.client_offset);
+client_region_.restore(st.client_offset, st.saved_client_count);
 ```
 
-`ClientRegion::restore` (`core/core.hpp:149`) sets `offset = saved_offset`. This
-rewinds the bump pointer to wherever it was when this branch's choice point was
-captured, effectively discarding all allocations made by sibling branches after
-that choice point. Because the `ChangeSet::ops` array lives in the
-`ChangeSet` header (below `sizeof(ChangeSet)`), and `client_region_.offset`
-never goes below `sizeof(ChangeSet)`, the `op_count` and `ops` array are **not**
-rewound by this mechanism. However, allocations in `cs->arena` (e.g., the
-`deep_copy_term` of op arguments and the marker bytes) are rewound.
+`ClientRegion::restore` (`core/core.hpp:153`) sets both `offset = saved_offset`
+and `client_count = saved_count`. This rewinds the bump pointer to wherever it
+was when this branch's choice point was captured and simultaneously restores the
+`op_count` tracker to the count at the same point. `ChangeSet::ops[]` entries
+above the restored `client_count` are effectively invisible: `apply_changeset`
+reads only `cs->ops[0..op_count-1]`, and `op_count` is synchronized from
+`client_region_.client_count` by `sync_changeset_op_count()` (`rap/rap.hpp:82`)
+before `apply_changeset` is called. Allocations in `cs->arena` (e.g., the
+`deep_copy_term` of op arguments and the marker bytes) are also rewound by the
+bump-pointer half of the restore.
 
 **Commit on `handleUnknownRelation` success.** After a successful call to
 `handleUnknownRelation` (i.e., `cons-ops` or `no-ops` returns `Yield`), the
-caller in `step` updates:
+caller in `step` updates both fields:
 
 ```cpp
-st.client_offset = client_region_.offset;  // core/core.hpp:1584
+st.client_offset      = client_region_.offset;       // core/core.hpp:1598
+st.saved_client_count = client_region_.client_count; // core/core.hpp:1599
 ```
 
-This advances `st.client_offset` to include the new allocation, so that
-subsequent BFS steps — including successors of this branch — will not rewind
-past the new op. The new `client_offset` is then propagated forward in the
-`State` passed to `apply_k_or_yield`.
+This advances both `st.client_offset` and `st.saved_client_count` to include
+the new allocation and the incremented op count, so subsequent BFS steps —
+including successors of this branch — will not rewind past the new op. Both
+values are then propagated forward in the `State` passed to `apply_k_or_yield`.
 
-**Ops already accumulated before failure.** If a query calls `cons-ops` to push
-op A, then `cons-ops` to push op B, then the branch fails on a third goal (not
-involving `cons-ops`), the state at the choice point before op A is popped from
-the BFS queue and `restore(st.client_offset)` rewinds the bump pointer back to
-before op A. However, `op_count` in the `ChangeSet` header is **not** rewound
-(it was incremented in-place by `handle_cons_ops`). This is a subtle asymmetry:
-the marker bytes and `deep_copy_term` data for ops A and B are reclaimed by the
-bump rewind, but `op_count` and the `ops[]` array entries are not.
+**`handle_cons_ops` sync at entry.** `RapEvaluator::handle_cons_ops`
+(`rap/rap.hpp:178`) begins with:
 
-In practice, for the intended usage pattern (`no-ops` and `cons-ops` are called
-at the very end of a successful query branch, chained so that each `cons-ops`
-call depends on the prior one succeeding), the `op_count` inconsistency does
-not arise: the `ops` array is fully populated only when a complete successful
-branch finishes and the `OpsOut` chain unifies correctly. If any `cons-ops`
-call in the chain fails mid-way, the partially written ops in `cs->ops` remain,
-but since the only surviving branch would be an alternative that doesn't reach
-those `cons-ops` calls, `apply_changeset` will only see ops from the branch
-that actually succeeded (assuming exactly one branch succeeds before `runN`
-returns its first answer).
+```cpp
+cs->op_count = client_region_.client_count;
+```
 
-**Can a successful ChangeSet include effects from an abandoned branch?** Yes, in
-pathological cases. The `op_count` counter and `ops[]` array are not guarded by
-the bump-pointer mechanism, so if one branch partially pushes ops and then
-fails, and a later branch succeeds without pushing any ops, the successful
-branch's ChangeSet will contain the stale ops from the failed branch. The bump
-pointer for `cs->arena` data is properly rewound, but `op_count` itself is not.
-In the intended use (where a single complete `cons-ops` chain is the last step
-of a successful query), this does not manifest because a complete chain
-overwrites `op_count` monotonically from 0.
+This is the critical correction: before pushing a new op, the physical
+`cs->op_count` is overwritten from the save/restore-managed
+`client_region_.client_count`. This prevents a stale `cs->op_count` (left by
+a sibling branch that failed after pushing ops) from causing the new branch's
+op to be placed at the wrong index. After a successful push, `client_count` is
+updated to match:
+
+```cpp
+client_region_.client_count = cs->op_count;
+```
+
+**No ops from failed branches can survive.** If a query calls `cons-ops` to push
+op A, then the branch fails on a subsequent goal, the choice point before op A
+is popped from the BFS queue with its saved `saved_client_count = 0`. The next
+`step` call restores `client_region_.client_count = 0`, so any later
+`cons-ops` call by the surviving branch will sync `cs->op_count` to 0 before
+pushing. The `ops[]` entries written by the failed branch remain in memory but
+are unreachable because `op_count` (as seen by `apply_changeset`) reflects only
+the successful branch's count.
+
+**Can a successful ChangeSet include effects from an abandoned branch?** No —
+after this fix, it cannot. `apply_changeset` reads `cs->op_count` only after
+`sync_changeset_op_count()` (`rap/rap.hpp:82`) is called by `run_one`, which
+sets `cs->op_count = client_region_.client_count`. The value of
+`client_region_.client_count` at that point reflects the winning branch's
+`saved_client_count` as restored by the final `step` call, not any stale value
+from a failed sibling. Regression test A in `rap/test_stage2.cpp` verifies
+this: a `disj` where the first branch pushes a stale op then fails and the
+second branch pushes the correct op must yield exactly one op.
 
 ---
 
@@ -228,23 +238,26 @@ ChangeSet from logically equivalent initial conditions.
 `Evaluator::step` (`core/core.hpp:1478-1535`). `probe_run`
 (`core/core.hpp:1349-1402`) creates a fresh local `WorkQueue q2` and a fresh
 `kont_done` continuation, runs the sub-goal with the current `State st` (which
-carries the current `client_region_.offset` as `st.client_offset`), and returns
-the outcome and witness state. Inside `probe_run`, `step` is called with the
-same `client_region_` (which is a member of the same `Evaluator` instance).
-Therefore, `cons-ops` calls inside a Probe sub-goal **will** write into the
-same `ChangeSet` as the outer query and **will not** be isolated by sandboxing.
-The `sandbox` flag (`core/core.hpp:1531-1534`) controls only whether the
-witness substitution (`witness.subst`) is propagated back to the outer state —
-not whether client region allocations escape.
+carries the current `client_region_.offset` as `st.client_offset` and the
+current op count as `st.saved_client_count`), and returns the outcome and
+witness state. Inside `probe_run`, `step` is called with the same
+`client_region_` (which is a member of the same `Evaluator` instance), so
+`cons-ops` calls inside a Probe sub-goal write into the same `ChangeSet` as
+the outer query. The `sandbox` flag controls whether the witness substitution
+(`witness.subst`) is propagated back to the outer state.
 
-Concretely: if `sandbox=true` and `got == Outcome::True`, the outer
-`apply_k_or_yield` is called with the **original** `st` (not `witness`),
-meaning the outer query's substitution is unchanged. But any `Op` entries pushed
-into `cs->ops` by `cons-ops` calls inside the probe are not rolled back; they
-remain in the ChangeSet. The bump-pointer `client_offset` in `st` is also
-unchanged (it reflects the pre-probe value), so on the next `step` call,
-`client_region_.restore(st.client_offset)` will rewind the bump pointer for
-`cs->arena` — but `cs->op_count` will not be decremented.
+**Probe op_count isolation.** After `probe_run` returns, the
+`GoalTag::Probe` handler in `step` resets `client_region_.client_count` to
+`st.saved_client_count` (the pre-probe count), discarding any op-count
+increments accumulated inside the probe. For `sandbox=false`, the witness
+`State` also has its `saved_client_count` overridden to `st.saved_client_count`
+before being passed to `apply_k_or_yield`, so the outer BFS work item carries
+the pre-probe count forward. The result is that `cons-ops` calls inside a Probe
+sub-goal do not persist into the outer ChangeSet regardless of the sandbox flag.
+Sandbox isolation therefore applies to both substitution bindings and ChangeSet
+contents. Regression test B in `rap/test_stage2.cpp` verifies this: a Probe
+sub-goal that calls `cons-ops` must not produce an output op in the outer
+ChangeSet.
 
 **Probe step budget and step counting.** `probe_run` (`core/core.hpp:1387`) uses
 its own local loop counter `i` from 0 to `max_iter - 1`. This is completely
@@ -338,24 +351,21 @@ work is O(K) per reactive step.
 The following findings diverge from or supplement comments and documentation
 currently in the repository:
 
-1. **`cons-ops` and client region under sandbox Probe (rap/rap.hpp:130-148,
-   core/core.hpp:1531-1534).** The comments in `rap/rap.hpp` and
-   `core/core.hpp` describe `ClientRegion` allocation as "automatically
-   rewound on backtrack" but do not explicitly address the behavior of
-   `cons-ops` calls made inside a sandboxed `Probe`. As documented in Section
-   5, `cons-ops` calls inside a Probe do write into the ChangeSet and the
-   bump-pointer is rewound but `op_count` is not decremented. This combination
-   means sandbox isolation applies only to substitution bindings, not to
-   `ChangeSet::op_count`.
+1. **`cons-ops` and client region under sandbox Probe (rap/rap.hpp, Section 5).**
+   After the ChangeSet backtrack fix (`docs/CHANGESET_BACKTRACK_FIX.md`),
+   `cons-ops` calls inside a sandboxed Probe are fully isolated: both the
+   bump-pointer and the `op_count` tracker (`client_region_.client_count`) are
+   rewound to their pre-probe values when `probe_run` returns. Sandbox isolation
+   now applies to both substitution bindings and ChangeSet contents.
 
-2. **`op_count` not guarded by bump-pointer (Section 3).** The comment at
-   `core/core.hpp:126-127` states "the core's only obligations: save offset when
-   saving a choice point, restore offset when backtracking." This is accurate for
-   the bump-pointer itself but implies a complete rollback of side effects. In
-   practice, `ChangeSet::op_count` is incremented directly (not via the
-   bump-pointer) and is not rolled back. The current usage pattern (a single
-   successful branch with chained `cons-ops`) makes this safe, but the guarantee
-   relies on usage conventions, not the mechanism itself.
+2. **`op_count` now guarded by save/restore (Section 3).** The comment at
+   `core/core.hpp` describing `ClientRegion` obligations now covers both the
+   bump-pointer offset and the `client_count` field. `ChangeSet::op_count` is
+   kept in sync with `client_region_.client_count` via an explicit sync at the
+   start of each `handle_cons_ops` call and via `sync_changeset_op_count()`
+   before `apply_changeset`. The guarantee no longer relies on usage conventions;
+   it is enforced by the save/restore discipline in `State::saved_client_count`
+   and `ClientRegion::restore`.
 
 3. **Agenda reset-on-empty behavior (agenda.hpp:51, 89).** The comment "reset on
    empty" appears inline but is not explained in the struct's block comment.

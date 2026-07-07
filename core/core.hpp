@@ -134,10 +134,12 @@ enum class ClientId : std::uint32_t {
 };
 
 struct ClientRegion {
-  ClientId       id       = ClientId::None;
-  std::uint8_t*  base     = nullptr;
-  std::uint32_t  capacity = 0;
-  std::uint32_t  offset   = 0;   // saved/restored on backtrack via State
+  ClientId       id            = ClientId::None;
+  std::uint8_t*  base          = nullptr;
+  std::uint32_t  capacity      = 0;
+  std::uint32_t  offset        = 0;   // saved/restored on backtrack via State
+  std::uint32_t  client_count  = 0;   // opaque integer saved/restored alongside offset;
+                                       // used by RapEvaluator to track ChangeSet::op_count
 
   void* alloc(std::uint32_t n) {
     if (offset + n > capacity) return nullptr;
@@ -146,8 +148,11 @@ struct ClientRegion {
     return p;
   }
 
-  void restore(std::uint32_t saved_offset) {
-    offset = saved_offset;
+  // Restore both the bump-pointer offset and the opaque client_count.
+  // saved_count defaults to 0 so existing single-arg call sites still compile.
+  void restore(std::uint32_t saved_offset, std::uint32_t saved_count = 0) {
+    offset       = saved_offset;
+    client_count = saved_count;
   }
 };
 static_assert(std::is_trivially_destructible_v<ClientRegion>);
@@ -198,7 +203,8 @@ struct State {
   const Constraint* constraints;  // STAGE_ARITH: renamed from diseqs
   const EnvFrame*   env;
   std::uint32_t     counter;
-  std::uint32_t     client_offset;  // Stage 0B: saved/restored with State on backtrack
+  std::uint32_t     client_offset;       // Stage 0B: saved/restored with State on backtrack
+  std::uint32_t     saved_client_count;  // mirrors ClientRegion::client_count for save/restore
 };
 static_assert(std::is_trivially_destructible_v<State>);
 
@@ -977,7 +983,7 @@ inline StepResult Evaluator::add_constraint(
   c->offset = offset;
   c->rel    = rel;
   c->next   = st.constraints;
-  State st2{ st.subst, c, st.env, st.counter, st.client_offset };
+  State st2{ st.subst, c, st.env, st.counter, st.client_offset, st.saved_client_count };
   return apply_k_or_yield(a, q, st2, k, w, yielded);
 }
 
@@ -991,7 +997,7 @@ inline StepResult Evaluator::unify_and_continue(
   const Binding* s = st.subst;
   if (!unify(a, lhs, rhs, nullptr, s, rel_env)) return StepResult::NoYield;
   if (!check_constraints(a, st.constraints, s, rel_env)) return StepResult::NoYield;
-  State st2{ s, st.constraints, st.env, st.counter, st.client_offset };
+  State st2{ s, st.constraints, st.env, st.counter, st.client_offset, st.saved_client_count };
   return apply_k_or_yield(a, q, st2, k, w, yielded);
 }
 
@@ -1410,9 +1416,10 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
   State       st = w->st;
   const Kont* k  = w->k;
 
-  // Restore client region to the saved offset for this branch.
-  // Rewinds any allocations made by a sibling branch after the choice point.
-  client_region_.restore(st.client_offset);
+  // Restore client region to the saved offset and client_count for this branch.
+  // client_count is the op_count tracker used by RapEvaluator; restoring it
+  // here ensures sibling-branch ops do not survive into the winning branch.
+  client_region_.restore(st.client_offset, st.saved_client_count);
 
   switch (g->tag) {
 
@@ -1420,7 +1427,7 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       const Binding* s = st.subst;
       if (!unify(a, g->eq.u, g->eq.v, st.env, s, rel_env)) return StepResult::NoYield;
       if (!check_constraints(a, st.constraints, s, rel_env)) return StepResult::NoYield;
-      State st2{ s, st.constraints, st.env, st.counter, st.client_offset };
+      State st2{ s, st.constraints, st.env, st.counter, st.client_offset, st.saved_client_count };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
@@ -1467,7 +1474,7 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       // BVar indices compiled in the outer scope to resolve against the wrong env.
       const Kont* wrapped_k = kont_restore_env(a, st.env, k);
       if (!wrapped_k) return StepResult::OOM;
-      State st2{ st.subst, st.constraints, env2, st.counter, st.client_offset };
+      State st2{ st.subst, st.constraints, env2, st.counter, st.client_offset, st.saved_client_count };
       w->g  = g->fresh.body;
       w->st = st2;
       w->k  = wrapped_k;
@@ -1526,9 +1533,16 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       Outcome got{};
       probe_run(g->probe.sub, st, max_iter, witness, rel_env, got);
 
+      // Restore client_count to pre-probe value.  Any cons-ops calls made
+      // inside the probe advanced client_region_.client_count; undo that here
+      // so probe ops do not appear in the outer ChangeSet regardless of sandbox.
+      client_region_.client_count = st.saved_client_count;
+
       if (got != want) return StepResult::NoYield;
 
       if (!sandbox && got == Outcome::True) {
+        // Propagate the probe's substitution bindings but not its op_count.
+        witness.saved_client_count = st.saved_client_count;
         return apply_k_or_yield(a, q, witness, k, w, yielded);
       }
       return apply_k_or_yield(a, q, st, k, w, yielded);
@@ -1580,8 +1594,9 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
             StepResult sr = handleUnknownRelation(
                 rel_t.sym, resolved, g->call.arg_count, st);
             if (sr == StepResult::NoYield) return StepResult::NoYield;
-            // Relation succeeded; commit any client region allocations.
-            st.client_offset = client_region_.offset;
+            // Relation succeeded; commit client region state (offset + client_count).
+            st.client_offset      = client_region_.offset;
+            st.saved_client_count = client_region_.client_count;
             return apply_k_or_yield(a, q, st, k, w, yielded);
           }
         }
@@ -1629,7 +1644,7 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       // caller's scope to resolve against the wrong env chain.
       const Kont* wrapped_k = kont_restore_env(a, st.env, k);
       if (!wrapped_k) return StepResult::OOM;
-      State st2{ s, st.constraints, body_env, st.counter, st.client_offset };
+      State st2{ s, st.constraints, body_env, st.counter, st.client_offset, st.saved_client_count };
       w->g  = rel->body;
       w->st = st2;
       w->k  = wrapped_k;
@@ -1668,7 +1683,7 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       c->rel    = ConstraintRel::Eq;
       c->next   = st.constraints;
 
-      State st2{ st.subst, c, st.env, st.counter, st.client_offset };
+      State st2{ st.subst, c, st.env, st.counter, st.client_offset, st.saved_client_count };
       return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
@@ -1712,10 +1727,11 @@ inline void Evaluator::runN(int n, const Goal* query_goal, Term query_var,
   const Kont* kd = kont_done(a);
   if (!kd) return;
 
-  // Initialize state. client_offset reflects the current region offset
-  // (typically 0 for a fresh evaluator, or whatever was allocated before).
-  // Second nullptr is for const Constraint* constraints (empty at start).
-  State st0{ nullptr, nullptr, nullptr, vars_used, client_region_.offset };
+  // Initialize state. client_offset reflects the current region offset.
+  // saved_client_count reflects the current client_count (set by init_changeset
+  // to 0 before each run, ensuring backtracking never restores stale op_count).
+  State st0{ nullptr, nullptr, nullptr, vars_used, client_region_.offset,
+             client_region_.client_count };
 
   Work* w0 = a.make<Work>();
   if (!w0) return;

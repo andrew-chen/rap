@@ -63,7 +63,8 @@ public:
                             - static_cast<std::uint32_t>(sizeof(ChangeSet));
     new (&cs->arena) Arena(arena_buf, arena_cap);
 
-    client_region_.offset = static_cast<std::uint32_t>(sizeof(ChangeSet));
+    client_region_.offset       = static_cast<std::uint32_t>(sizeof(ChangeSet));
+    client_region_.client_count = 0;  // reset op_count tracker for each query
   }
 
   // Return the ChangeSet pointer.
@@ -72,6 +73,15 @@ public:
     if (client_region_.id != ClientId::RAP) return nullptr;
     if (client_region_.capacity < sizeof(ChangeSet)) return nullptr;
     return reinterpret_cast<ChangeSet*>(client_region_.base);
+  }
+
+  // Sync cs->op_count from client_region_.client_count.
+  // Must be called by run_one() before apply_changeset() so that the physical
+  // op_count reflects the saved/restored value rather than any stale state
+  // left by a failed branch or a sandboxed Probe.
+  void sync_changeset_op_count() {
+    if (ChangeSet* cs = get_changeset())
+      cs->op_count = client_region_.client_count;
   }
 
 protected:
@@ -160,6 +170,12 @@ inline StepResult RapEvaluator::handle_cons_ops(
 
   ChangeSet* cs = get_or_init_changeset();
   if (!cs) return StepResult::NoYield;
+  // Sync op_count from the save/restore mechanism before using it.
+  // client_region_.client_count was restored at the top of step() to the
+  // value saved by the current branch's last committed cons-ops (or 0 if
+  // this is a fresh branch). Without this sync, cs->op_count might still
+  // hold a stale value left by a sibling branch that failed after pushing ops.
+  cs->op_count = client_region_.client_count;
   if (cs->op_count >= MAX_CHANGESET_OPS) return StepResult::NoYield;
 
   // Walk the Op term (args[0]).
@@ -215,6 +231,9 @@ inline StepResult RapEvaluator::handle_cons_ops(
   // Non-Pair Op arg: succeed without pushing.
 
   if (push_this_op && !cs->push(op)) return StepResult::NoYield;
+  // Keep client_count in sync so that the commit in step() captures the
+  // updated op_count and subsequent restore() calls correctly unwind to it.
+  client_region_.client_count = cs->op_count;
 
   // Marker byte for consistency tracking.
   void* marker = cs->arena.alloc(1, 1);

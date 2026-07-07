@@ -239,7 +239,12 @@ struct RapLoop {
         }
 
     apply:
-        // Extract ChangeSet and apply its ops.
+        // Sync cs->op_count from client_region_.client_count before applying.
+        // If the winning branch made no cons-ops calls, the restore at the top
+        // of the last step() set client_count to the branch's saved value (0
+        // for a fresh branch), but cs->op_count may still hold a stale value
+        // from a failed sibling or from inside a sandboxed Probe.
+        evaluator->sync_changeset_op_count();
         ChangeSet* cs = evaluator->get_changeset();
         if (cs)
             apply_changeset(*cs);

@@ -211,6 +211,84 @@ int main() {
         }
     }
 
+    // =========================================================================
+    // Test A: stale ops from a failed branch must not appear in the ChangeSet.
+    //
+    // The first branch pushes Output(stale) then fails (== 0 1 is false).
+    // The second branch pushes Output(correct) and succeeds.
+    // Without the fix: op_count=2, apply_changeset produces 2 output terms.
+    // With the fix:    op_count=1, apply_changeset produces 1 output term.
+    // =========================================================================
+    {
+        RapLoop loop2;
+        EXPECT(loop2.init(), "Test A: RapLoop initializes");
+
+        const char* defs_a =
+            "(defrel (backtrack-test agenda ops)"
+            "  (disj"
+            "    (conj"
+            "      (== 0 1)"
+            "      (fresh (c) (conj (call no-ops c) (call cons-ops (output stale) c ops))))"
+            "    (fresh (c) (conj (call no-ops c) (call cons-ops (output correct) c ops)))))";
+
+        EXPECT(loop2.load_defs(defs_a), "Test A: definitions load");
+
+        std::uint32_t qid = loop2.enqueue_query("backtrack-test");
+        EXPECT(qid != 0u, "Test A: backtrack-test enqueued");
+
+        loop2.run_one();
+
+        EXPECT(loop2.output.count == 1u,
+               "Test A: exactly one output (stale op from failed branch excluded)");
+
+        if (loop2.output.count >= 1) {
+            Term out = loop2.output.terms[0];
+            bool is_correct = (out.tag == TermTag::Sym &&
+                               sym_lit_eq(out.sym, "correct"));
+            EXPECT(is_correct, "Test A: output term is 'correct', not 'stale'");
+        }
+    }
+
+    // =========================================================================
+    // Test B: ops pushed inside a sandboxed Probe must not appear in the outer
+    //         ChangeSet.
+    //
+    // The probe sub-goal calls cons-ops (pushing Output(probe-output)).
+    // sandbox=true: the probe's substitution is discarded.
+    // Without the fix: both probe-output and outer-output are applied (count=2).
+    // With the fix:    only outer-output is applied (count=1).
+    // =========================================================================
+    {
+        RapLoop loop3;
+        EXPECT(loop3.init(), "Test B: RapLoop initializes");
+
+        const char* defs_b =
+            "(defrel (probe-test agenda outer-ops)"
+            "  (conj"
+            "    (probe"
+            "      (fresh (io c2)"
+            "        (conj (call no-ops c2) (call cons-ops (output probe-output) c2 io)))"
+            "      true 100 true false)"
+            "    (fresh (c) (conj (call no-ops c) (call cons-ops (output outer-output) c outer-ops)))))";
+
+        EXPECT(loop3.load_defs(defs_b), "Test B: definitions load");
+
+        std::uint32_t qid3 = loop3.enqueue_query("probe-test");
+        EXPECT(qid3 != 0u, "Test B: probe-test enqueued");
+
+        loop3.run_one();
+
+        EXPECT(loop3.output.count == 1u,
+               "Test B: exactly one output (sandboxed probe op excluded)");
+
+        if (loop3.output.count >= 1) {
+            Term out = loop3.output.terms[0];
+            bool is_outer = (out.tag == TermTag::Sym &&
+                             sym_lit_eq(out.sym, "outer-output"));
+            EXPECT(is_outer, "Test B: output term is 'outer-output', not 'probe-output'");
+        }
+    }
+
     std::printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

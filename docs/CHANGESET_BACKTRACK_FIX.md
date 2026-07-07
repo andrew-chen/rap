@@ -1,7 +1,7 @@
 # Fix Spec: ChangeSet op_count Participation in Backtrack Save/Restore
 
 **Version:** 1.0  
-**Depends on:** STAGE_B_FIX complete (structural Rel-only invariant, `docs/STAGE_B_FIX.md`)  
+**Depends on:** STAGE_B_FIX complete (structural Rel-only invariant, `docs/STAGE_B_FIX.md`) (including all STAGE_B related fixes such as STAGE_B_AFTER_FIX_2)
 **Modifies:** `core/core.hpp`, `rap/rap.hpp`, `rap/changeset.hpp` (likely);
              `rap/loop.hpp`, `core/test_extension.cpp`,
              `rap/test_stage2.cpp` (tests); `docs/formal-semantics.md`  
