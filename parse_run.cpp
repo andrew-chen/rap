@@ -1,4 +1,5 @@
 #include "core/sexp_parser.hpp"
+#include <chrono>
 #include <cstdio>
 
 int main() {
@@ -77,6 +78,8 @@ int main() {
     program13
   };
 
+  // ---- Diagnostic pass: print goal trees and results (one run each) ----
+
   for (const char* src : programs) {
     std::printf("----------------------------------------\n");
     std::printf("Program: %s\n\n", src);
@@ -102,6 +105,73 @@ int main() {
 
     std::printf("\n");
     a.reset();
+  }
+
+  // ---- Benchmark pass: 5 warmup + 100 measured iterations per program ----
+  // printf is suppressed during the hot loop to avoid measuring I/O.
+  // Each iteration calls parse_query then runN on a freshly reset arena.
+  // Averages are reported in µs to one decimal place.
+
+  std::printf("========================================\n");
+  std::printf("Parse vs. Evaluation Timing (avg over 100 iterations, 5 warmup)\n");
+  std::printf("========================================\n");
+
+  int prog_num = 0;
+  for (const char* src : programs) {
+    ++prog_num;
+
+    // Pre-loop validity check: ensure the program parses before starting
+    // the benchmark. A failed parse here would silently produce meaningless
+    // timing numbers against a null goal.
+    {
+      ParsedQuery pq_check = parse_query(a, src);
+      bool ok = (pq_check.goal != nullptr);
+      a.reset();
+      if (!ok) {
+        std::printf("Program %2d: [SKIP — parse failed]\n", prog_num);
+        continue;
+      }
+    }
+
+    using clock = std::chrono::high_resolution_clock;
+
+    // Warmup: 5 iterations, timing discarded.
+    for (int w = 0; w < 5; ++w) {
+      ParsedQuery pq = parse_query(a, src);
+      if (pq.goal) {
+        Evaluator eval(&a, &a, &pq.intern, &pq.outcome_syms);
+        eval.runN(pq.n, pq.goal, pq.qvar, pq.vars_used, pq.rel_env,
+                  [](Term, State) {});
+      }
+      a.reset();
+    }
+
+    // Measurement: 100 iterations.
+    long long total_parse_ns = 0, total_eval_ns = 0;
+    for (int i = 0; i < 100; ++i) {
+      auto t0 = clock::now();
+      ParsedQuery pq = parse_query(a, src);
+      auto t1 = clock::now();
+      total_parse_ns +=
+          std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+
+      if (pq.goal) {
+        Evaluator eval(&a, &a, &pq.intern, &pq.outcome_syms);
+        auto t2 = clock::now();
+        eval.runN(pq.n, pq.goal, pq.qvar, pq.vars_used, pq.rel_env,
+                  [](Term, State) {});
+        auto t3 = clock::now();
+        total_eval_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(t3 - t2).count();
+      }
+      a.reset();
+    }
+
+    double parse_us = total_parse_ns / 100.0 / 1000.0;
+    double eval_us  = total_eval_ns  / 100.0 / 1000.0;
+    double total_us = parse_us + eval_us;
+    std::printf("Program %2d: parse: %5.1f \xc2\xb5s  eval: %5.1f \xc2\xb5s  total: %5.1f \xc2\xb5s\n",
+                prog_num, parse_us, eval_us, total_us);
   }
 
   return 0;
