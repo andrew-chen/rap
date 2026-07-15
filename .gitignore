@@ -54,3 +54,4 @@ test_rap
 test_stage2_asan
 *.plist
 *.yml
+security/security_test
