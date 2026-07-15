@@ -274,5 +274,64 @@ int main() {
         }
     }
 
+    // --- Case Study 3: Audit Query ---
+    std::printf("\n=== Audit Query: Devices with read access to sensor-data ===\n\n");
+
+    // Multi-solution query: find all devices whose role permits read on sensor-data.
+    // Uses the same fact base already in memory; no dynamic string construction needed.
+    // Single run — correctness demonstration, not benchmarking.
+    const char* audit_query =
+        "(run 4 (q)"
+        "  (fresh (r)"
+        "    (disj"
+        "      (== (list role sensor-node-7         sensor)   (list role q r))"
+        "      (== (list role operator-console-2    operator) (list role q r))"
+        "      (== (list role gateway-node-1        gateway)  (list role q r))"
+        "      (== (list role guest-device-1        guest)    (list role q r)))"
+        "    (disj"
+        "      (== (list allow sensor   read  sensor-data)    (list allow r read sensor-data))"
+        "      (== (list allow operator read  config-data)    (list allow r read sensor-data))"
+        "      (== (list allow operator write config-data)    (list allow r read sensor-data))"
+        "      (== (list allow gateway  read  sensor-data)    (list allow r read sensor-data))"
+        "      (== (list allow guest    read  public-data)    (list allow r read sensor-data)))))";
+
+    ParsedQuery pq = parse_query(checker.arena, audit_query);
+    if (!pq.goal) {
+        std::printf("ERROR: audit query failed to parse\n");
+        return 1;
+    }
+
+    std::vector<Term> answers;
+    runN(checker.arena, pq.n, pq.goal, pq.qvar, pq.vars_used, pq.outcome_syms,
+        [&](Term ans, State) { answers.push_back(ans); });
+
+    std::printf("Results: ");
+    for (std::size_t i = 0; i < answers.size(); ++i) {
+        if (i > 0) std::printf(", ");
+        print_term(answers[i]);
+    }
+    std::printf("\n");
+
+    bool found_sensor  = false;
+    bool found_gateway = false;
+    for (const auto& t : answers) {
+        if (t.tag == TermTag::Sym && t.sym) {
+            if (sym_lit_eq(t.sym, "sensor-node-7"))  found_sensor  = true;
+            if (sym_lit_eq(t.sym, "gateway-node-1")) found_gateway = true;
+        }
+    }
+
+    if (answers.size() == 2 && found_sensor && found_gateway) {
+        std::printf("PASS: 2 devices found as expected\n");
+    } else {
+        std::printf("FAIL: unexpected results\n");
+        std::printf("  got %zu answer(s):", answers.size());
+        for (const auto& t : answers) { std::printf(" "); print_term(t); }
+        std::printf("\n");
+        checker.arena.reset();
+        return 1;
+    }
+
+    checker.arena.reset();
     return 0;
 }
