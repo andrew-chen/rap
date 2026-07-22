@@ -55,3 +55,6 @@ test_stage2_asan
 *.plist
 *.yml
 security/security_test
+raprunner
+repl
+security/security_test
