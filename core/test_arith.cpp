@@ -303,6 +303,181 @@ int main() {
     }
 
     // =========================================================================
+    // divmodo
+    // =========================================================================
+    std::printf("--- divmodo ---\n");
+
+    // All-bound verify: 3*5+2=17, 0<=2<5.
+    EXPECT(run_check("(divmodo 17 5 3 2)") == 1, "divmodo 17 5 3 2: 1 solution (verify)");
+    EXPECT(run_check("(divmodo 17 5 4 2)") == 0, "divmodo 17 5 4 2: 0 solutions (wrong q)");
+    EXPECT(run_check("(divmodo 17 5 3 3)") == 0, "divmodo 17 5 3 3: 0 solutions (wrong r)");
+
+    // b <= 0 rejected.
+    EXPECT(run_check("(divmodo 17 0 3 2)") == 0, "divmodo 17 0 3 2: 0 solutions (b=0)");
+    EXPECT(run_check("(divmodo 17 -1 3 2)") == 0, "divmodo 17 -1 3 2: 0 solutions (b<0)");
+
+    // q unknown (a, b, r known).
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (divmodo 17 5 q 2))");
+        EXPECT(cnt == 1, "divmodo 17 5 q 2: 1 solution");
+        EXPECT(ans == "3", "divmodo 17 5 q 2: q=3");
+    }
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (divmodo 17 5 q 3))");
+        EXPECT(cnt == 0, "divmodo 17 5 q 3: 0 solutions (r=3 not consistent)");
+        (void)_1;
+    }
+
+    // r unknown (a, b, q known).
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (divmodo 17 5 3 q))");
+        EXPECT(cnt == 1, "divmodo 17 5 3 q: 1 solution");
+        EXPECT(ans == "2", "divmodo 17 5 3 q: q=2");
+    }
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (divmodo 17 5 4 q))");
+        EXPECT(cnt == 0, "divmodo 17 5 4 q: 0 solutions (q=4 => r=-3, invalid)");
+        (void)_1;
+    }
+
+    // a unknown (b, q, r known): a = b*q + r.
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (divmodo q 5 3 2))");
+        EXPECT(cnt == 1, "divmodo q 5 3 2: 1 solution");
+        EXPECT(ans == "17", "divmodo q 5 3 2: q=17");
+    }
+
+    // b unknown (a, q, r known): b = (a-r)/q.
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (divmodo 17 q 3 2))");
+        EXPECT(cnt == 1, "divmodo 17 q 3 2: 1 solution");
+        EXPECT(ans == "5", "divmodo 17 q 3 2: q=5");
+    }
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (divmodo 17 q 0 2))");
+        EXPECT(cnt == 0, "divmodo 17 q 0 2: 0 solutions (q=0, b unconstrained)");
+        (void)_1;
+    }
+
+    // Both q and r unknown (a, b known): floor division.
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (r) (divmodo 17 5 q r)))");
+        EXPECT(cnt == 1, "divmodo 17 5 q r (both unknown): 1 solution");
+        EXPECT(ans == "3", "divmodo 17 5 q r: q=3");
+    }
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (dv) (divmodo 17 5 dv q)))");
+        EXPECT(cnt == 1, "divmodo 17 5 (quotient) q (remainder): 1 solution");
+        EXPECT(ans == "2", "divmodo 17 5 _ q: r=2");
+    }
+    {
+        // 100 / 7 = 14 remainder 2
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (r) (divmodo 100 7 q r)))");
+        EXPECT(cnt == 1, "divmodo 100 7 q r: 1 solution");
+        EXPECT(ans == "14", "divmodo 100 7 q r: q=14");
+    }
+    {
+        // 0 / 5 = 0 remainder 0
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (r) (divmodo 0 5 q r)))");
+        EXPECT(cnt == 1, "divmodo 0 5 q r: 1 solution");
+        EXPECT(ans == "0", "divmodo 0 5 q r: q=0");
+    }
+    {
+        // Floor division: -7 / 5 = -2 remainder 3 (floor, not truncated -1 r -2)
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (r) (divmodo -7 5 q r)))");
+        EXPECT(cnt == 1, "divmodo -7 5 q r: 1 solution (floor division)");
+        EXPECT(ans == "-2", "divmodo -7 5 q r: q=-2 (floor)");
+    }
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (dv) (divmodo -7 5 dv q)))");
+        EXPECT(cnt == 1, "divmodo -7 5 _ r: remainder=3");
+        EXPECT(ans == "3", "divmodo -7 5 _ q: r=3");
+    }
+    {
+        // Large value: 2147483647 / 3 = 715827882 r 1  (715827882*3=2147483646)
+        auto [cnt, ans] = run_query("(run 1 (q) (fresh (r) (divmodo 2147483647 3 q r)))");
+        EXPECT(cnt == 1, "divmodo 2147483647 3 q r: 1 solution");
+        EXPECT(ans == "715827882", "divmodo 2147483647 3 q r: q=715827882");
+    }
+
+    // =========================================================================
+    // divo and modo via inline defrels (using divmodo under the hood)
+    // =========================================================================
+    std::printf("--- divo/modo (inline defrel) ---\n");
+
+    static const char divo_prefix[] =
+        "(defrel (divo a b q r) (divmodo a b q r))"
+        "(defrel (modo a b r) (fresh (q) (divo a b q r)))";
+
+    auto run_divo = [&](const char* body) -> std::pair<int,std::string> {
+        std::string src = std::string(divo_prefix) + "(run 1 (q) " + body + ")";
+        return run_query(src.c_str(), 1);
+    };
+    auto check_divo = [&](const char* body) -> int {
+        std::string src = std::string(divo_prefix) + "(run 1 (q) " + body + ")";
+        return run_query(src.c_str(), 1).first;
+    };
+
+    // divo: basic cases.
+    EXPECT(check_divo("(divo 17 5 3 2)") == 1, "divo 17 5 3 2: 1 solution (verify)");
+    EXPECT(check_divo("(divo 17 5 4 2)") == 0, "divo 17 5 4 2: 0 solutions");
+    {
+        auto [cnt, ans] = run_divo("(divo 17 5 q 2)");
+        EXPECT(cnt == 1, "divo 17 5 q 2: 1 solution");
+        EXPECT(ans == "3", "divo 17 5 q 2: q=3");
+    }
+    {
+        auto [cnt, ans] = run_divo("(divo 17 5 3 q)");
+        EXPECT(cnt == 1, "divo 17 5 3 q: 1 solution");
+        EXPECT(ans == "2", "divo 17 5 3 q: q=2");
+    }
+    {
+        auto [cnt, ans] = run_divo("(divo q 5 3 2)");
+        EXPECT(cnt == 1, "divo q 5 3 2: 1 solution");
+        EXPECT(ans == "17", "divo q 5 3 2: q=17");
+    }
+    {
+        auto [cnt, ans] = run_divo("(divo 17 q 3 2)");
+        EXPECT(cnt == 1, "divo 17 q 3 2: 1 solution");
+        EXPECT(ans == "5", "divo 17 q 3 2: q=5");
+    }
+    {
+        // Both q and r unknown via divo.
+        auto [cnt, ans] = run_divo("(fresh (r) (divo 17 5 q r))");
+        EXPECT(cnt == 1, "divo 17 5 q r (both unknown): 1 solution");
+        EXPECT(ans == "3", "divo 17 5 q r: q=3");
+    }
+
+    // modo: basic cases.
+    {
+        auto [cnt, ans] = run_divo("(modo 17 5 q)");
+        EXPECT(cnt == 1, "modo 17 5 q: 1 solution");
+        EXPECT(ans == "2", "modo 17 5 q: q=2");
+    }
+    {
+        auto [cnt, ans] = run_divo("(modo 100 7 q)");
+        EXPECT(cnt == 1, "modo 100 7 q: 1 solution");
+        EXPECT(ans == "2", "modo 100 7 q: q=2");
+    }
+    {
+        auto [cnt, ans] = run_divo("(modo 0 5 q)");
+        EXPECT(cnt == 1, "modo 0 5 q: 1 solution");
+        EXPECT(ans == "0", "modo 0 5 q: q=0");
+    }
+    {
+        // Floor division: -7 mod 5 = 3 (not -2 from truncated division)
+        auto [cnt, ans] = run_divo("(modo -7 5 q)");
+        EXPECT(cnt == 1, "modo -7 5 q: 1 solution (floor)");
+        EXPECT(ans == "3", "modo -7 5 q: q=3 (floor mod)");
+    }
+    {
+        // Large INT32-safe value: 2147483647 mod 3 = 1
+        auto [cnt, ans] = run_divo("(modo 2147483647 3 q)");
+        EXPECT(cnt == 1, "modo 2147483647 3 q: 1 solution");
+        EXPECT(ans == "1", "modo 2147483647 3 q: q=1");
+    }
+
+    // =========================================================================
     // Summary
     // =========================================================================
     std::printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);

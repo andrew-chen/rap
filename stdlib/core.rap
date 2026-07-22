@@ -15,11 +15,9 @@
 (defrel (mulo a b c)
   (multaddiso a b 0 c))
 
-; (divo a b q r) — a = b*q + r, with 0 <= r < b
+; (divo a b q r) — a = b*q + r, with 0 <= r < b (floor division, b > 0)
 (defrel (divo a b q r)
-  (multaddiso q b r a)
-  (leqo 0 r)
-  (lto r b))
+  (divmodo a b q r))
 
 ; (modo a b r) — a mod b = r
 (defrel (modo a b r)

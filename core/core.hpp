@@ -844,6 +844,7 @@ public:
       sym_neqo_       = intern_cstr(*sym_arena_, *intern_, "neqo");
       sym_addsubo_    = intern_cstr(*sym_arena_, *intern_, "addsubo");
       sym_multaddiso_ = intern_cstr(*sym_arena_, *intern_, "multaddiso");
+      sym_divmodo_    = intern_cstr(*sym_arena_, *intern_, "divmodo");
       sym_charo_      = intern_cstr(*sym_arena_, *intern_, "charo");
       sym_boundo_     = intern_cstr(*sym_arena_, *intern_, "boundo");
       sym_rel_arityo_ = intern_cstr(*sym_arena_, *intern_, "rel-arityo");
@@ -921,6 +922,7 @@ private:
   StepResult handle_neqo      (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_addsubo   (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_multaddiso(const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
+  StepResult handle_divmodo   (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_charo     (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_boundo    (const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
   StepResult handle_rel_arityo(const Term* args, std::uint32_t ac, State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y, const RelEnv& re);
@@ -945,6 +947,7 @@ private:
   const SymEntry* sym_neqo_       = nullptr;
   const SymEntry* sym_addsubo_    = nullptr;
   const SymEntry* sym_multaddiso_ = nullptr;
+  const SymEntry* sym_divmodo_    = nullptr;
   const SymEntry* sym_charo_      = nullptr;
   const SymEntry* sym_boundo_     = nullptr;
   const SymEntry* sym_rel_arityo_ = nullptr;
@@ -1015,6 +1018,7 @@ inline StepResult Evaluator::handleKnownRelation(
   if (name == sym_neqo_)       return handle_neqo      (args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_addsubo_)    return handle_addsubo   (args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_multaddiso_) return handle_multaddiso(args, arg_count, st, a, q, k, w, yielded, rel_env);
+  if (name == sym_divmodo_)    return handle_divmodo   (args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_charo_)      return handle_charo     (args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_boundo_)     return handle_boundo    (args, arg_count, st, a, q, k, w, yielded, rel_env);
   if (name == sym_rel_arityo_) return handle_rel_arityo(args, arg_count, st, a, q, k, w, yielded, rel_env);
@@ -1264,6 +1268,104 @@ inline StepResult Evaluator::handle_multaddiso(
     if (num % av != 0) return StepResult::NoYield;  // not exactly divisible
     std::int32_t result = static_cast<std::int32_t>(num / av);
     return unify_and_continue(tb, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  return StepResult::NoYield;
+}
+
+// ============================================================================
+// divmodo: (divmodo a b q r) — floor division: a = b*q + r, 0 <= r < b
+// Requires b > 0 (NoYield otherwise).
+// Handles: all-bound verify; q+r both unbound (floor division);
+//          any single unknown (solve and verify constraints).
+// ============================================================================
+inline StepResult Evaluator::handle_divmodo(
+    const Term* args, std::uint32_t ac,
+    State& st, Arena& a, WorkQueue& q, const Kont* k, Work* w, State& y,
+    const RelEnv& re)
+{
+  if (ac != 4) return StepResult::NoYield;
+  Term ta = args[0]; Term tb = args[1]; Term tq = args[2]; Term tr = args[3];
+  bool a_var = (ta.tag == TermTag::Var);
+  bool b_var = (tb.tag == TermTag::Var);
+  bool qv_var = (tq.tag == TermTag::Var);
+  bool r_var = (tr.tag == TermTag::Var);
+  bool a_int = (ta.tag == TermTag::Int);
+  bool b_int = (tb.tag == TermTag::Int);
+  bool qv_int = (tq.tag == TermTag::Int);
+  bool r_int = (tr.tag == TermTag::Int);
+
+  // All non-variable arguments must be Int.
+  if (!a_var && !a_int) return StepResult::NoYield;
+  if (!b_var && !b_int) return StepResult::NoYield;
+  if (!qv_var && !qv_int) return StepResult::NoYield;
+  if (!r_var && !r_int) return StepResult::NoYield;
+
+  std::int64_t av = a_int ? static_cast<std::int64_t>(ta.value) : 0;
+  std::int64_t bv = b_int ? static_cast<std::int64_t>(tb.value) : 0;
+  std::int64_t qval = qv_int ? static_cast<std::int64_t>(tq.value) : 0;
+  std::int64_t rv = r_int ? static_cast<std::int64_t>(tr.value) : 0;
+
+  // Only positive divisors are supported.
+  if (b_int && bv <= 0) return StepResult::NoYield;
+
+  int unbound = (a_var ? 1 : 0) + (b_var ? 1 : 0) + (qv_var ? 1 : 0) + (r_var ? 1 : 0);
+
+  if (unbound == 0) {
+    // All bound: verify a == b*q + r and 0 <= r < b.
+    if (av == bv * qval + rv && rv >= 0 && rv < bv)
+      return apply_k_or_yield(a, q, st, k, w, y);
+    return StepResult::NoYield;
+  }
+
+  if (unbound == 2 && qv_var && r_var && a_int && b_int) {
+    // Both quotient and remainder unknown — compute via floor division.
+    std::int64_t q0 = av / bv;
+    std::int64_t r0 = av % bv;
+    // Adjust truncated division to floor division.
+    if (r0 != 0 && ((r0 < 0) != (bv < 0))) { q0--; r0 += bv; }
+    // Double-unification: bind q then r, then continue once.
+    const Binding* s = st.subst;
+    if (!unify(a, tq, Term::integer(static_cast<std::int32_t>(q0)), nullptr, s, re))
+      return StepResult::NoYield;
+    if (!check_constraints(a, st.constraints, s, re)) return StepResult::NoYield;
+    if (!unify(a, tr, Term::integer(static_cast<std::int32_t>(r0)), nullptr, s, re))
+      return StepResult::NoYield;
+    if (!check_constraints(a, st.constraints, s, re)) return StepResult::NoYield;
+    State st2{ s, st.constraints, st.env, st.counter, st.client_offset, st.saved_client_count };
+    return apply_k_or_yield(a, q, st2, k, w, y);
+  }
+
+  if (unbound >= 2) return StepResult::NoYield;
+
+  // Exactly one unknown.
+  if (a_var) { // b, q, r bound: a = b*q + r
+    if (!b_int || !qv_int || !r_int) return StepResult::NoYield;
+    if (rv < 0 || rv >= bv) return StepResult::NoYield;
+    std::int32_t result = static_cast<std::int32_t>(bv * qval + rv);
+    return unify_and_continue(ta, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (b_var) { // a, q, r bound: b = (a - r) / q, q must be nonzero
+    if (!a_int || !qv_int || !r_int) return StepResult::NoYield;
+    if (qval == 0) return StepResult::NoYield;
+    std::int64_t num = av - rv;
+    if (num % qval != 0) return StepResult::NoYield;
+    std::int64_t bres = num / qval;
+    if (bres <= 0 || rv < 0 || rv >= bres) return StepResult::NoYield;
+    return unify_and_continue(tb, Term::integer(static_cast<std::int32_t>(bres)), st, a, q, k, w, y, re);
+  }
+  if (qv_var) { // a, b, r bound: q = (a - r) / b
+    if (!a_int || !b_int || !r_int) return StepResult::NoYield;
+    if (rv < 0 || rv >= bv) return StepResult::NoYield;
+    std::int64_t num = av - rv;
+    if (num % bv != 0) return StepResult::NoYield;
+    std::int32_t result = static_cast<std::int32_t>(num / bv);
+    return unify_and_continue(tq, Term::integer(result), st, a, q, k, w, y, re);
+  }
+  if (r_var) { // a, b, q bound: r = a - b*q, verify 0 <= r < b
+    if (!a_int || !b_int || !qv_int) return StepResult::NoYield;
+    std::int64_t rres = av - bv * qval;
+    if (rres < 0 || rres >= bv) return StepResult::NoYield;
+    return unify_and_continue(tr, Term::integer(static_cast<std::int32_t>(rres)), st, a, q, k, w, y, re);
   }
   return StepResult::NoYield;
 }
