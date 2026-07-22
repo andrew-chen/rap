@@ -1,0 +1,73 @@
+; prng.rap — relational Linear Congruential Generator (LCG) for Stage 3.
+;
+; Unlike Gemini's suggested LFSR-with-Peano-numerals approach, this uses
+; RAP's native int32 arithmetic (addo, mulo, modo, all backed by real
+; machine integers per core.hpp's handle_addsubo/handle_multaddiso) rather
+; than working around an assumed lack of host arithmetic. RAP is not pure
+; microKanren in that sense: addo/mulo/modo are primitive relations, same
+; tier as no-ops/cons-ops, and they use real int32 values under the hood.
+;
+; This is a standard LCG: next = (a * seed + c) mod m
+; Parameters below (a, c, m) are the classic ANSI C rand() constants,
+; chosen for simplicity, not cryptographic quality — fine for antagonist
+; move selection, not appropriate for anything security-sensitive.
+;
+; NOTE on bidirectionality: addo/mulo/modo require at least two of three
+; arguments bound to run (see handle_addsubo in core.hpp — it returns
+; NoYield if 2+ args are unbound). This means lcg-nexto runs forward
+; (seed -> next) but generally will NOT run backward to recover a seed
+; from a next value, unlike the LFSR approach's pure-unification
+; reversibility. If backward "seed cracking" is ever actually needed,
+; that specific requirement should be revisited; nothing in the Stage 3
+; plan as currently scoped needs it.
+
+; lcg-nexto: given the current seed, produce the next pseudorandom state.
+; next = (1103515245 * seed + 12345) mod 2147483648
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 1103515245 seed product)
+    (addo product 12345 sum)
+    (modo sum 2147483648 next)))
+
+; lcg-rangeo: given a seed, produce the next state AND a value bounded
+; to [0, bound). Useful for e.g. picking a board position to swap.
+; Returns both next (to thread the generator forward) and val (the
+; bounded output to actually use).
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+; lcg-seqo: given a seed and a count n (plain integer, not Peano), produce
+; a list of n successive pseudorandom states, threading the generator
+; forward each time. out-seq is the list of states; final-seed is the
+; last state reached (useful for continuing the sequence later).
+(defrel (lcg-seqo seed n out-seq final-seed)
+  (disj
+    (conj (eqo n 0) (== out-seq ()) (== final-seed seed))
+    (fresh (n1 next rest)
+      (conj
+        (gto n 0)
+        (subo n 1 n1)
+        (lcg-nexto seed next)
+        (== out-seq (next . rest))
+        (lcg-seqo next n1 rest final-seed)))))
+
+; main: one-shot demonstration, in the style of memory_stage1.rap rather
+; than wc.rap — this program does not stream input from stdin, it just
+; generates a fixed sequence from a fixed seed and reports it. Seed and
+; count are hardcoded here for demonstration; a real Stage 3 antagonist
+; would instead carry the seed as part of its own agenda-entry state,
+; call lcg-nexto once per move, and thread final-seed forward the same
+; way wc-counter threads its running counts forward via re-adding
+; itself to the agenda with updated args.
+(defrel (main args ops)
+  (fresh (seq final-seed)
+    (conj
+      (lcg-seqo 42 5 seq final-seed)
+      (call cons-ops
+        (output (prng-sequence seq final-seed))
+        (no-ops) ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
