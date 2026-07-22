@@ -22,12 +22,34 @@
 ; plan as currently scoped needs it.
 
 ; lcg-nexto: given the current seed, produce the next pseudorandom state.
-; next = (1103515245 * seed + 12345) mod 2147483648
+; next = (1103515245 * seed + 12345) mod 2147483647
+;
+; NOTE: modulus is 2147483647 (2^31 - 1, a Mersenne prime, and the
+; largest value representable in int32), NOT 2147483648 (2^31, which
+; is INT32_MAX + 1 and cannot be represented as a Term::Int at all —
+; caught during review before this ever got tested). This also means
+; the classic ANSI C constants (mod 2^31) are slightly off their
+; textbook form, but remain a perfectly reasonable LCG for
+; non-cryptographic antagonist move selection.
+;
+; CAUTION, NOT YET VERIFIED: 1103515245 * seed can itself overflow
+; int32 well before the mod is applied, if seed is large (multiplier
+; is close to 2^30, so any seed above roughly 2 risks the true
+; product exceeding int32 range). handle_multaddiso computes products
+; using int64 intermediates internally, so this may already be handled
+; correctly — but this has NOT been confirmed against core.hpp, and
+; if seed values in practice approach the full int32 range this needs
+; explicit checking before relying on it. A conventional safer choice
+; if this turns out to be a problem: use a much smaller modulus (e.g.
+; 2^16 or 2^31-1 with a smaller multiplier chosen so multiplier*modulus
+; fits safely), or confirm handle_multaddiso's int64 path truncates
+; correctly back to the intended mathematical result rather than
+; silently wrapping.
 (defrel (lcg-nexto seed next)
   (fresh (product sum)
     (mulo 1103515245 seed product)
     (addo product 12345 sum)
-    (modo sum 2147483648 next)))
+    (modo sum 2147483647 next)))
 
 ; lcg-rangeo: given a seed, produce the next state AND a value bounded
 ; to [0, bound). Useful for e.g. picking a board position to swap.
