@@ -4,18 +4,23 @@
 ;; Arithmetic convenience wrappers
 
 ; (addo a b c) — a + b = c
+; Fails (no solution) if the true result does not fit in int32.
 (defrel (addo a b c)
   (addsubo a b c))
 
 ; (subo a b c) — a - b = c  (i.e. a = c + b)
+; Fails (no solution) if the true result does not fit in int32.
 (defrel (subo a b c)
   (addsubo c b a))
 
 ; (mulo a b c) — a * b = c
+; Fails (no solution) if the true product does not fit in int32.
+; Does NOT silently wrap — callers must keep intermediate values within range.
 (defrel (mulo a b c)
   (multaddiso a b 0 c))
 
 ; (divo a b q r) — a = b*q + r, with 0 <= r < b (floor division, b > 0)
+; Fails (no solution) if a computed result does not fit in int32.
 (defrel (divo a b q r)
   (divmodo a b q r))
 

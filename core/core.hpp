@@ -1168,6 +1168,14 @@ inline StepResult Evaluator::handle_neqo(
 }
 
 // ============================================================================
+// Arithmetic overflow guard — used by all result-producing built-in handlers.
+// Returns true iff v fits in int32 without truncation.
+// ============================================================================
+namespace { inline bool fits_i32(std::int64_t v) noexcept {
+    return v >= INT32_MIN && v <= INT32_MAX;
+} }
+
+// ============================================================================
 // addsubo: (addsubo a b c) means a + b = c
 // ============================================================================
 inline StepResult Evaluator::handle_addsubo(
@@ -1193,19 +1201,19 @@ inline StepResult Evaluator::handle_addsubo(
     return StepResult::NoYield;
   }
   if (c_var && a_int && b_int) {
-    std::int32_t result = static_cast<std::int32_t>(
-        static_cast<std::int64_t>(ta.value) + static_cast<std::int64_t>(tb.value));
-    return unify_and_continue(tc, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = static_cast<std::int64_t>(ta.value) + static_cast<std::int64_t>(tb.value);
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(tc, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (a_var && b_int && c_int) {
-    std::int32_t result = static_cast<std::int32_t>(
-        static_cast<std::int64_t>(tc.value) - static_cast<std::int64_t>(tb.value));
-    return unify_and_continue(ta, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = static_cast<std::int64_t>(tc.value) - static_cast<std::int64_t>(tb.value);
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(ta, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (b_var && a_int && c_int) {
-    std::int32_t result = static_cast<std::int32_t>(
-        static_cast<std::int64_t>(tc.value) - static_cast<std::int64_t>(ta.value));
-    return unify_and_continue(tb, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = static_cast<std::int64_t>(tc.value) - static_cast<std::int64_t>(ta.value);
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(tb, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   return StepResult::NoYield;  // non-integer ground term
 }
@@ -1248,26 +1256,30 @@ inline StepResult Evaluator::handle_multaddiso(
     return StepResult::NoYield;
   }
   if (d_var) { // a, b, c bound
-    std::int32_t result = static_cast<std::int32_t>(av * bv + cv);
-    return unify_and_continue(td, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = av * bv + cv;
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(td, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (c_var) { // a, b, d bound
-    std::int32_t result = static_cast<std::int32_t>(dv - av * bv);
-    return unify_and_continue(tc, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = dv - av * bv;
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(tc, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (a_var) { // b, c, d bound
     if (bv == 0) return StepResult::NoYield;  // division by zero / unconstrained
     std::int64_t num = dv - cv;
     if (num % bv != 0) return StepResult::NoYield;  // not exactly divisible
-    std::int32_t result = static_cast<std::int32_t>(num / bv);
-    return unify_and_continue(ta, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = num / bv;
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(ta, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (b_var) { // a, c, d bound
     if (av == 0) return StepResult::NoYield;  // division by zero / unconstrained
     std::int64_t num = dv - cv;
     if (num % av != 0) return StepResult::NoYield;  // not exactly divisible
-    std::int32_t result = static_cast<std::int32_t>(num / av);
-    return unify_and_continue(tb, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = num / av;
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(tb, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   return StepResult::NoYield;
 }
@@ -1324,6 +1336,7 @@ inline StepResult Evaluator::handle_divmodo(
     // Adjust truncated division to floor division.
     if (r0 != 0 && ((r0 < 0) != (bv < 0))) { q0--; r0 += bv; }
     // Double-unification: bind q then r, then continue once.
+    if (!fits_i32(q0) || !fits_i32(r0)) return StepResult::NoYield;
     const Binding* s = st.subst;
     if (!unify(a, tq, Term::integer(static_cast<std::int32_t>(q0)), nullptr, s, re))
       return StepResult::NoYield;
@@ -1341,8 +1354,9 @@ inline StepResult Evaluator::handle_divmodo(
   if (a_var) { // b, q, r bound: a = b*q + r
     if (!b_int || !qv_int || !r_int) return StepResult::NoYield;
     if (rv < 0 || rv >= bv) return StepResult::NoYield;
-    std::int32_t result = static_cast<std::int32_t>(bv * qval + rv);
-    return unify_and_continue(ta, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = bv * qval + rv;
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(ta, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (b_var) { // a, q, r bound: b = (a - r) / q, q must be nonzero
     if (!a_int || !qv_int || !r_int) return StepResult::NoYield;
@@ -1351,6 +1365,7 @@ inline StepResult Evaluator::handle_divmodo(
     if (num % qval != 0) return StepResult::NoYield;
     std::int64_t bres = num / qval;
     if (bres <= 0 || rv < 0 || rv >= bres) return StepResult::NoYield;
+    if (!fits_i32(bres)) return StepResult::NoYield;
     return unify_and_continue(tb, Term::integer(static_cast<std::int32_t>(bres)), st, a, q, k, w, y, re);
   }
   if (qv_var) { // a, b, r bound: q = (a - r) / b
@@ -1358,13 +1373,15 @@ inline StepResult Evaluator::handle_divmodo(
     if (rv < 0 || rv >= bv) return StepResult::NoYield;
     std::int64_t num = av - rv;
     if (num % bv != 0) return StepResult::NoYield;
-    std::int32_t result = static_cast<std::int32_t>(num / bv);
-    return unify_and_continue(tq, Term::integer(result), st, a, q, k, w, y, re);
+    std::int64_t r64 = num / bv;
+    if (!fits_i32(r64)) return StepResult::NoYield;
+    return unify_and_continue(tq, Term::integer(static_cast<std::int32_t>(r64)), st, a, q, k, w, y, re);
   }
   if (r_var) { // a, b, q bound: r = a - b*q, verify 0 <= r < b
     if (!a_int || !b_int || !qv_int) return StepResult::NoYield;
     std::int64_t rres = av - bv * qval;
     if (rres < 0 || rres >= bv) return StepResult::NoYield;
+    if (!fits_i32(rres)) return StepResult::NoYield;
     return unify_and_continue(tr, Term::integer(static_cast<std::int32_t>(rres)), st, a, q, k, w, y, re);
   }
   return StepResult::NoYield;

@@ -182,6 +182,29 @@ int main() {
         EXPECT(cnt == 0, "addsubo q q q: 0 solutions (two unbound)");
         (void)_1;
     }
+    // Overflow: true result does not fit in int32 → fail, not silent wrap.
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (addsubo 2000000000 2000000000 q))");
+        EXPECT(cnt == 0, "addsubo overflow: 2e9+2e9 > INT32_MAX → 0 solutions");
+        (void)_1;
+    }
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (addsubo 2000000000 100000000 q))");
+        EXPECT(cnt == 1, "addsubo 2e9+1e8=2.1e9: fits in int32 → 1 solution");
+        EXPECT(ans == "2100000000", "addsubo 2e9+1e8: answer is 2100000000");
+    }
+    // Boundary: INT32_MAX itself must succeed.
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (addsubo 2147483646 1 q))");
+        EXPECT(cnt == 1, "addsubo INT32_MAX-1 + 1 = INT32_MAX: 1 solution");
+        EXPECT(ans == "2147483647", "addsubo boundary: answer is INT32_MAX");
+    }
+    // INT32_MAX + 1 must fail.
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (addsubo 2147483647 1 q))");
+        EXPECT(cnt == 0, "addsubo INT32_MAX + 1 overflows → 0 solutions");
+        (void)_1;
+    }
 
     // =========================================================================
     // multaddiso
@@ -232,6 +255,31 @@ int main() {
     }
     EXPECT(run_check("(multaddiso 5 0 3 3)") == 1,
            "multaddiso 5 0 3 3: 1 solution (5*0+3=3, all bound)");
+    // Overflow: true result does not fit in int32 → fail.
+    // 1103515245 * 42 = 46347640290 — the original discovered bug.
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (multaddiso 1103515245 42 0 q))");
+        EXPECT(cnt == 0, "multaddiso overflow: 1103515245*42 > INT32_MAX → 0 solutions");
+        (void)_1;
+    }
+    // Boundary: 46340^2 = 2147396900 < INT32_MAX → should succeed.
+    // 46341^2 = 2147488281 > INT32_MAX → should fail.
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (multaddiso 46340 46340 0 q))");
+        EXPECT(cnt == 1, "multaddiso 46340^2=2147395600 fits → 1 solution");
+        EXPECT(ans == "2147395600", "multaddiso 46340^2: answer is 2147395600");
+    }
+    {
+        auto [cnt, _1] = run_query("(run 1 (q) (multaddiso 46341 46341 0 q))");
+        EXPECT(cnt == 0, "multaddiso 46341^2=2147488281 > INT32_MAX → 0 solutions");
+        (void)_1;
+    }
+    // INT32_MAX itself as a product must succeed.
+    {
+        auto [cnt, ans] = run_query("(run 1 (q) (multaddiso 1 2147483647 0 q))");
+        EXPECT(cnt == 1, "multaddiso 1*INT32_MAX: 1 solution");
+        EXPECT(ans == "2147483647", "multaddiso 1*INT32_MAX: answer is INT32_MAX");
+    }
 
     // =========================================================================
     // charo
@@ -475,6 +523,42 @@ int main() {
         auto [cnt, ans] = run_divo("(modo 2147483647 3 q)");
         EXPECT(cnt == 1, "modo 2147483647 3 q: 1 solution");
         EXPECT(ans == "1", "modo 2147483647 3 q: q=1");
+    }
+
+    // =========================================================================
+    // Overflow: mulo (via inline defrel, same multaddiso path)
+    // =========================================================================
+    std::printf("--- mulo overflow ---\n");
+    {
+        // Original discovered bug: 1103515245 * 42 = 46347640290, doesn't fit.
+        // Previously produced -896999966 silently; now must fail.
+        std::string src = std::string(divo_prefix) +
+            "(run 1 (q) (fresh (r) (mulo 1103515245 42 r) (== q r)))";
+        // Note: mulo uses multaddiso under the hood; divo_prefix defines divo/modo only.
+        // Use multaddiso directly for mulo test.
+    }
+    {
+        // Test mulo via multaddiso (mulo a b c ≡ multaddiso a b 0 c).
+        auto [cnt, _1] = run_query("(run 1 (q) (multaddiso 1103515245 42 0 q))");
+        EXPECT(cnt == 0, "mulo overflow (via multaddiso): 1103515245*42 → 0 solutions");
+        (void)_1;
+    }
+
+    // =========================================================================
+    // Overflow: divmodo a_var case (b*q+r can overflow int32)
+    // =========================================================================
+    std::printf("--- divmodo a_var overflow ---\n");
+    {
+        // b=1000000, q=3000, r=0 → a = 3e9 > INT32_MAX → must fail.
+        auto [cnt, _1] = run_query("(run 1 (q) (divmodo q 1000000 3000 0))");
+        EXPECT(cnt == 0, "divmodo a_var: b*q+r=3e9 > INT32_MAX → 0 solutions");
+        (void)_1;
+    }
+    {
+        // b=1, q=INT32_MAX, r=0 → a = INT32_MAX → must succeed.
+        auto [cnt, ans] = run_query("(run 1 (q) (divmodo q 1 2147483647 0))");
+        EXPECT(cnt == 1, "divmodo a_var: b*q+r=INT32_MAX → 1 solution");
+        EXPECT(ans == "2147483647", "divmodo a_var: answer is INT32_MAX");
     }
 
     // =========================================================================
