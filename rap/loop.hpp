@@ -182,17 +182,17 @@ struct RapLoop {
         return agenda.enqueue(rel_term, Term::nil());
     }
 
-    // Run until no runnable entries remain.
+    // Run until the agenda is empty.
     void run_until_empty(std::uint32_t max_steps = 10000) {
-        for (std::uint32_t s = 0; s < max_steps && agenda.has_runnable(); ++s)
+        for (std::uint32_t s = 0; s < max_steps && !agenda.empty(); ++s)
             run_one();
     }
 
-    // Execute one runnable query from the agenda.
+    // Execute one query from the agenda (plain FIFO dequeue).
     void run_one() {
         if (!evaluator) return;
         QueryEntry entry;
-        if (!agenda.dequeue_runnable(entry)) return;
+        if (!agenda.dequeue(entry)) return;
 
         // Build agenda list term from remaining entries.
         spine.reset();
@@ -212,13 +212,15 @@ struct RapLoop {
                 eval_arena.alloc(nparams * sizeof(Term), alignof(Term)));
             if (!call_args) goto apply;
 
-            // Param 0 always = agenda_term.
-            // Param 1 (if present): pass published state, OR Var(1) if nil
-            // (nil means runnable — use unbound Var so cons-ops can bind it).
+            // Calling convention (N = nparams, always 2 or 3):
+            //   call_args[0]     = agenda snapshot (always)
+            //   call_args[N-2]   = entry.args (only when N==3; nil if not provided)
+            //   call_args[N-1]   = Term::var(1), the ops output variable (always last)
+            // vars_used=2 reserves Var(0) (result) and Var(1) (ops) throughout.
             call_args[0] = agenda_term;
-            if (nparams >= 2)
-                call_args[1] = (entry.args.tag == TermTag::Nil)
-                              ? Term::var(1) : entry.args;
+            if (nparams == 3)
+                call_args[1] = entry.args;
+            call_args[nparams - 1] = Term::var(1);
 
             {
                 GoalCall gc;
@@ -231,8 +233,7 @@ struct RapLoop {
                 call_goal->tag  = GoalTag::Call;
                 call_goal->call = gc;
 
-                // vars_used = 2 always: Var(0) = result var, Var(1) reserved for
-                // wrapper ops (enqueue_handle_input inner call uses Term::var(1)).
+                // vars_used = 2: Var(0) = result var, Var(1) = ops output.
                 evaluator->runN(1, call_goal, Term::var(0), 2, rel_env,
                     [](Term, State) {});
             }

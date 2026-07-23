@@ -80,7 +80,8 @@ static void apply_changeset(const ChangeSet& cs,
 
 
 // ============================================================================
-// run_one: dequeue and execute one Rel agenda entry (skip data items)
+// run_one: dequeue and execute one agenda entry (plain FIFO — every entry
+// is runnable; there is no state-holder distinction).
 // ============================================================================
 static void run_one(RapEvaluator& evaluator,
                     Agenda&       agenda,
@@ -90,7 +91,7 @@ static void run_one(RapEvaluator& evaluator,
                     Arena&        intern_arena,
                     bool          verbose = false) {
     QueryEntry entry;
-    if (!agenda.dequeue_runnable(entry)) return;
+    if (!agenda.dequeue(entry)) return;
 
     // Build agenda list term from remaining entries.
     spine.reset();
@@ -105,17 +106,22 @@ static void run_one(RapEvaluator& evaluator,
         Term* call_args = static_cast<Term*>(
             eval_arena.alloc(nparams * sizeof(Term), alignof(Term)));
         if (call_args) {
+            // Calling convention (N = nparams, always 2 or 3):
+            //   call_args[0]     = agenda snapshot
+            //   call_args[N-2]   = entry.args (only when N==3; nil if not provided)
+            //   call_args[N-1]   = Term::var(1), the ops output variable (always last)
+            // vars_used=2 reserves Var(0) (result) and Var(1) (ops).
             call_args[0] = agenda_term;
-            if (nparams >= 2)
-                call_args[1] = (entry.args.tag == TermTag::Nil)
-                              ? Term::var(1) : entry.args;
+            if (nparams == 3)
+                call_args[1] = entry.args;
+            call_args[nparams - 1] = Term::var(1);
 
             Goal* call_goal = eval_arena.make<Goal>();
             if (call_goal) {
                 call_goal->tag  = GoalTag::Call;
                 call_goal->call = GoalCall{entry.query_term, call_args, nparams};
 
-                // vars_used = 2 always: reserves Var(1) for wrapper ops.
+                // vars_used = 2: Var(0) = result, Var(1) = ops output.
                 bool oom = false;
                 evaluator.runN(1, call_goal, Term::var(0), 2, rel_env,
                                [](Term, State) {}, &oom, dump_oom_work_queue);
@@ -242,11 +248,13 @@ static Term build_char_list(Arena& pair_arena, Arena& sym_arena, Intern& intern,
 // ============================================================================
 // enqueue_handle_input: build and enqueue a handle_input wrapper query
 //
-// The wrapper is a 1-param RelNode:
-//   (rel (ops) (call handle_input agenda-snapshot fd-term input-term ops))
+// The wrapper is a 2-param RelNode following the standard arity-2 convention:
+//   (rel (agenda ops) (call handle_input agenda-snapshot fd-term input-term ops))
 //
-// It captures the agenda snapshot and fd/input at enqueue time.
-// When executed, it receives the live ops variable from the executor.
+// Agenda snapshot and fd/input are captured as literal terms at enqueue time.
+// The ops output variable (BVar(1)) is wired through the standard convention:
+// run_one passes Var(1) as call_args[1], which the wrapper's body receives as
+// BVar(1) and forwards to handle_input as its last argument.
 // ============================================================================
 static void enqueue_handle_input(Arena&      wrap_arena,
                                  Agenda&     agenda,
@@ -268,12 +276,13 @@ static void enqueue_handle_input(Arena&      wrap_arena,
         std::fprintf(stderr, "raprunner: OOM building handle_input args\n");
         return;
     }
-    inner_args[0] = agenda_snap;        // agenda snapshot
-    inner_args[1] = Term::integer(fd);  // fd identifier
-    inner_args[2] = input_term;         // char-list or nil (EOF)
-    inner_args[3] = Term::var(1);       // ops = Var(1), reserved by run_one's vars_used=2
+    inner_args[0] = agenda_snap;        // agenda snapshot (captured literal)
+    inner_args[1] = Term::integer(fd);  // fd identifier (captured literal)
+    inner_args[2] = input_term;         // char-list or nil / EOF (captured literal)
+    inner_args[3] = Term::bvar(1);      // ops = BVar(1): the wrapper's 2nd param,
+                                        //   which run_one binds to Var(1)
 
-    // Build the inner call goal: (call handle_input agenda fd input Var(1))
+    // Build the inner call goal: (call handle_input agenda-snap fd input BVar(1))
     Goal* body = wrap_arena.make<Goal>();
     if (!body) {
         std::fprintf(stderr, "raprunner: OOM building wrapper body\n");
@@ -282,16 +291,16 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     body->tag  = GoalTag::Call;
     body->call = GoalCall{handle_input_rel, inner_args, 4};
 
-    // Build the wrapper RelNode (1 param: agenda bvar(0)).
-    // Enqueued with nil args → runnable. run_one passes agenda as call_args[0].
-    // Var(1) in the body is reserved by vars_used=2, staying unbound until
-    // handle_input binds it via cons-ops.
+    // Build the 2-param wrapper RelNode: (rel (agenda ops) body).
+    // param_count=2 satisfies enqueue's {2,3} check.
+    // Enqueued with nil args; run_one passes [agenda_term, Var(1)] per the
+    // arity-2 calling convention, making BVar(1) resolve to Var(1) (ops).
     RelNode* wrapper = wrap_arena.make<RelNode>();
     if (!wrapper) {
         std::fprintf(stderr, "raprunner: OOM building wrapper RelNode\n");
         return;
     }
-    wrapper->param_count = 1;
+    wrapper->param_count = 2;
     wrapper->body        = body;
 
     Term wrapper_term = Term::relation(wrapper);
@@ -521,12 +530,12 @@ int main(int argc, char** argv) {
     for (int fd : extra_fds) watched_fds.push_back(fd);
 
     while (true) {
-        // Run agenda until no Rel items remain (data items may stay).
-        if (agenda.has_runnable()) {
+        // Run agenda until empty — every entry is runnable.
+        if (!agenda.empty()) {
             run_one(*evaluator, agenda, spine, rel_env,
                     eval_arena, intern_arena, verbose);
         } else {
-            // No Rel items remain. Reset wrap_arena — all wrappers have executed.
+            // Agenda empty. Reset wrap_arena — all wrappers have executed.
             wrap_arena.reset();
 
 		// Exit if no fds remain.

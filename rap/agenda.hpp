@@ -10,16 +10,20 @@ constexpr std::uint32_t QUEUE2_ARENA_SIZE = 64 * 1024;  // 64 KiB, paper-scale
 // QueryEntry: header stored at the start of each slot in the agenda buffer.
 // The term data (PairNodes) follows immediately in memory after the header.
 //
-// args: published state for this entry, or Term::nil() if none.
-// Entries with args == nil are "runnable" (dequeued by has_runnable /
-// dequeue_runnable). Entries with non-nil args are state-holders that
-// persist until explicitly removed.
+// Every agenda entry is runnable — there is no concept of a passive
+// "state-holder" entry. This matches the paper's formal semantics.
+//
+// args: the compound data term carried by this entry (Term::nil() if the
+// relation needs no state beyond the agenda snapshot). For arity-3 wrapper
+// relations (agenda args ops), run_one passes this as the middle argument.
+// For arity-2 wrapper relations (agenda ops), args is ignored by the caller
+// but may still be inspected via find-by-contento in the agenda snapshot.
 // ============================================================================
 struct QueryEntry {
     std::uint32_t id;          // stable ID for Remove ops
     std::uint32_t byte_size;   // total bytes this entry occupies (header + term data)
-    Term          query_term;  // must be a Rel with param_count 1 or 2
-    Term          args;        // published state; Term::nil() if none
+    Term          query_term;  // must be a Rel with param_count 2 or 3
+    Term          args;        // carried data; Term::nil() if none
 };
 static_assert(std::is_trivially_destructible_v<QueryEntry>);
 
@@ -39,14 +43,23 @@ struct Agenda {
 
     bool empty() const { return count == 0; }
 
-    // Enqueue a query: rel_term must be a Rel with param_count 1 or 2.
-    // args is published alongside it (Term::nil() if this entry should be
-    // runnable; non-nil for state-holding entries that persist until removed).
+    // Enqueue a query. rel_term must be a Rel with param_count 2 or 3.
+    //
+    // Arity convention (deliberate design limit, not a temporary restriction):
+    //   2 params (agenda ops)       — relation needs only the agenda snapshot.
+    //   3 params (agenda args ops)  — relation also receives stored data as its
+    //                                 middle argument; pass that data as `args`.
+    // Anything needing more than one data value should pack those values into a
+    // single compound term (list, alist, nested tuple) passed as `args` — not by
+    // widening param_count beyond 3.  enqueue rejects param_count outside {2,3}.
+    //
+    // `args` is deep-copied into the agenda buffer alongside rel_term.
+    // Pass Term::nil() when the relation needs no data beyond the agenda snapshot.
     // Returns assigned id, or 0 on rejection or OOM.
     std::uint32_t enqueue(Term rel_term, Term args) {
         if (rel_term.tag != TermTag::Rel || !rel_term.rel) return 0;
         std::uint32_t pc = rel_term.rel->param_count;
-        if (pc != 1 && pc != 2) return 0;
+        if (pc < 2 || pc > 3) return 0;
 
         if (count == 0) { head = 0; tail = 0; }  // reset on empty
 
@@ -90,40 +103,9 @@ struct Agenda {
         return true;
     }
 
-    // Returns true if any "runnable" entry exists: one with args == nil.
-    // State-holding entries (non-nil args) are passive data and not runnable.
-    bool has_runnable() const {
-        std::uint32_t pos = tail;
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(buf + pos);
-            if (e->args.tag == TermTag::Nil)
-                return true;
-            pos += e->byte_size;
-        }
-        return false;
-    }
-
-    // Dequeue the first runnable entry (args == nil), skipping state-holders.
-    bool dequeue_runnable(QueryEntry& out) {
-        if (count == 0) return false;
-        std::uint32_t pos = tail;
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(buf + pos);
-            if (e->args.tag == TermTag::Nil) {
-                std::uint32_t saved_id   = e->id;
-                Term          saved_term = e->query_term;
-                Term          saved_args = e->args;
-                remove(saved_id);
-                out.id         = saved_id;
-                out.byte_size  = 0;
-                out.query_term = saved_term;
-                out.args       = saved_args;
-                return true;
-            }
-            pos += e->byte_size;
-        }
-        return false;
-    }
+    // Every entry is runnable. has_runnable() is an alias for !empty() and is
+    // provided only for sites that haven't been updated yet; prefer !empty().
+    bool has_runnable() const { return !empty(); }
 
     // Remove a pending entry by ID.
     // Copies all subsequent entries forward using deep_copy_term (not memmove)
