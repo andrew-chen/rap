@@ -1,0 +1,55 @@
+; test_guide_claims.rap — test cases for docs/RAP_PROGRAMMING_GUIDE.md accuracy
+;
+; Run with: ./raprunner examples/test_guide_claims.rap < /dev/null
+;
+; Three inaccuracies / omissions confirmed against source:
+;
+; 1. (INACCURATE) The guide says only `conj` requires >= 2 arguments; it implies
+;    `disj` has no such restriction. In fact the parser enforces the same >= 2
+;    argument minimum on `disj` — (disj single-goal) is a compile error. This
+;    cannot be shown in a runnable .rap file (the file would fail to compile);
+;    see parse_run.cpp program 16 for the parse-level negative test.
+;
+; 2. (OMISSION) `geqo` (>=) and `neqo` (!=) are built-in comparison relations
+;    not listed in the guide's arithmetic section alongside leqo/lto/gto/eqo.
+;    Both exist and work. Tests below confirm this.
+;
+; 3. (OMISSION) `divo a b q r` fails silently when b <= 0 (b must be > 0).
+;    The guide says the result satisfies 0 <= r < b but does not state the b > 0
+;    precondition. Tests below confirm b=0 and b=-1 both produce no solution.
+;
+; Expected output (5 lines, all "pass"):
+;   (geqo-5-geq-3 pass)
+;   (geqo-3-geq-5-fails pass)
+;   (neqo-3-neq-4 pass)
+;   (neqo-3-eq-3-fails pass)
+;   (divo-b0-fails pass)
+;   (divo-bneg-fails pass)
+
+(defrel (main args ops)
+  (fresh (ops0 ops1 ops2 ops3 ops4 ops5)
+    (conj
+      ; --- geqo: (geqo a b) succeeds when a >= b ---
+      ; Confirm geqo 5 3 succeeds (5 >= 3 is true)
+      (probe (geqo 5 3) true 50 true false)
+      (cons-ops (output (geqo-5-geq-3 pass)) (no-ops) ops0)
+      ; Confirm geqo 3 5 fails (3 >= 5 is false)
+      (probe (geqo 3 5) false 50 true false)
+      (cons-ops (output (geqo-3-geq-5-fails pass)) ops0 ops1)
+      ; --- neqo: (neqo a b) succeeds when a != b ---
+      ; Confirm neqo 3 4 succeeds (3 != 4 is true)
+      (probe (neqo 3 4) true 50 true false)
+      (cons-ops (output (neqo-3-neq-4 pass)) ops1 ops2)
+      ; Confirm neqo 3 3 fails (3 != 3 is false)
+      (probe (neqo 3 3) false 50 true false)
+      (cons-ops (output (neqo-3-eq-3-fails pass)) ops2 ops3)
+      ; --- divo b > 0 requirement ---
+      ; Confirm divo fails when b = 0
+      (probe (fresh (q r) (divo 10 0 q r)) false 50 true false)
+      (cons-ops (output (divo-b0-fails pass)) ops3 ops4)
+      ; Confirm divo fails when b < 0
+      (probe (fresh (q r) (divo 10 -1 q r)) false 50 true false)
+      (cons-ops (output (divo-bneg-fails pass)) ops4 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

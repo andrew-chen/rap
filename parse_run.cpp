@@ -72,10 +72,40 @@ int main() {
     "    (=/= q foo)"
     "    (disj (== q foo) (== q bar) (== q baz))))";
 
+  // ---- Programs 14-16: Guide accuracy tests ----
+  // These programs exercise claims in docs/RAP_PROGRAMMING_GUIDE.md.
+
+  // Program 14: geqo (>=) exists as a built-in — the guide omits it from the
+  // comparisons list but it is a real relation alongside leqo/lto/gto/eqo.
+  // Expected: (5) — geqo 5 3 succeeds, geqo 2 3 fails.
+  const char* program14 =
+    "(run 1 (q)"
+    "  (conj"
+    "    (geqo q 3)"
+    "    (== q 5)"
+    "    (geqo 5 3)))";
+
+  // Program 15: neqo (!=) exists as a built-in — also omitted from the guide's
+  // comparisons list. Expected: (4) — neqo 4 3 succeeds, neqo 3 3 fails.
+  const char* program15 =
+    "(run 1 (q)"
+    "  (conj"
+    "    (neqo q 3)"
+    "    (== q 4)"
+    "    (neqo 4 3)))";
+
+  // Program 16: disj requires >= 2 args, same as conj — the guide says only
+  // conj has this restriction, but both do. This program should FAIL to parse
+  // with '[compile_goal] ERROR: disj requires at least 2 args'. The 'skipping
+  // run' line in the output confirms the parse failed as expected.
+  const char* program16 =
+    "(run 1 (q) (disj (== q foo)))";
+
   const char* programs[] = {
     program1, program2, program3, program4, program5, program6,
     program7, program8, program9, program10, program11, program12,
-    program13
+    program13,
+    program14, program15, program16
   };
 
   // ---- Diagnostic pass: print goal trees and results (one run each) ----
