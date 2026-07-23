@@ -1,0 +1,164 @@
+; test_board_shuffle.rap — confirm shuffling the fixed 16-value
+; multiset (a a b b c c d d e e f f g g h h) produces a valid board:
+; every value still appears exactly twice, length preserved. Builds
+; on shuffleo (already verified correct in test_shuffle.rap).
+;
+; Scope: this is a validity check on the SHUFFLED OUTPUT, not a new
+; piece of logic in its own right -- shuffleo itself is already
+; trusted. What's new here is confirming that shuffling a multiset
+; (as opposed to the all-distinct-values list used in test_shuffle.rap)
+; still produces something usable as a board, and building the
+; counting/validation logic to confirm that.
+;
+; Dependencies: copies in lcg-nexto, lcg-rangeo, nth-ato, set-nth-ato,
+; swap-nth, shuffleo verbatim from test_shuffle.rap (all independently
+; verified correct there).
+;
+; Run with: ./raprunner test_board_shuffle.rap < /dev/null
+
+;; --- copied verbatim from prng.rap / test_shuffle.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+(defrel (set-nth-ato lst idx new-val result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result (new-val . tail)))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (set-nth-ato tail idx1 new-val new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (swap-nth lst idx1 idx2 result)
+  (fresh (val1 val2 mid)
+    (conj
+      (nth-ato lst idx1 val1)
+      (nth-ato lst idx2 val2)
+      (set-nth-ato lst idx1 val2 mid)
+      (set-nth-ato mid idx2 val1 result))))
+
+(defrel (shuffleo lst seed i result final-seed)
+  (disj
+    (conj (eqo i 0) (== result lst) (== final-seed seed))
+    (fresh (i1 bound next j swapped)
+      (conj
+        (gto i 0)
+        (subo i 1 i1)
+        (addo i 1 bound)
+        (lcg-rangeo seed bound next j)
+        (swap-nth lst i j swapped)
+        (shuffleo swapped next i1 result final-seed)))))
+
+;; --- new for this test: validity checking ---
+
+; count-valo: count how many times val appears in lst.
+(defrel (count-valo lst val count)
+  (disj
+    (conj (== lst ()) (== count 0))
+    (fresh (head tail rest-count)
+      (conj
+        (== lst (head . tail))
+        (count-valo tail val rest-count)
+        (disj
+          (conj (probe (== head val) true 100 true false)
+                (addo rest-count 1 count))
+          (conj (probe (== head val) false 100 true false)
+                (== count rest-count)))))))
+
+; length-o: length of a list.
+(defrel (length-o lst n)
+  (disj
+    (conj (== lst ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== lst (head . tail))
+        (length-o tail n1)
+        (addo n1 1 n)))))
+
+; all-checks-passo: bundles the nine validity conditions into a
+; single named goal so it can be Probe'd as one unit (Probe requires
+; literal syntax at the call site -- see the programming guide, Part
+; 2 item 3 -- so this must be a named relation, not inlined twice).
+(defrel (all-checks-passo len ca cb cc cd ce cf cg ch)
+  (conj
+    (eqo len 16) (eqo ca 2) (eqo cb 2) (eqo cc 2) (eqo cd 2)
+    (eqo ce 2) (eqo cf 2) (eqo cg 2) (eqo ch 2)))
+
+; valid-boardo: succeeds iff board has exactly 16 elements and each of
+; a-h appears exactly twice.
+;
+; An earlier draft of this relation's final disj had the same
+; exclusivity problem flagged in the programming guide (Part 2, item
+; 2): the "invalid" branch's (=/= result valid) guard did not actually
+; depend on the "valid" branch's nine-way eqo conjunction failing, so
+; both branches could be available regardless of the real outcome.
+; Caught during review before running, not by a failure -- fixed here
+; using the same Probe-based pattern as has-new-pairo/
+; check-notin-reporto: convert the whole nine-condition check into an
+; explicit true/false result via Probe on the named all-checks-passo
+; relation, then branch on that.
+(defrel (valid-boardo board result)
+  (fresh (len ca cb cc cd ce cf cg ch)
+    (conj
+      (length-o board len)
+      (count-valo board a ca)
+      (count-valo board b cb)
+      (count-valo board c cc)
+      (count-valo board d cd)
+      (count-valo board e ce)
+      (count-valo board f cf)
+      (count-valo board g cg)
+      (count-valo board h ch)
+      (disj
+        (conj
+          (probe (all-checks-passo len ca cb cc cd ce cf cg ch)
+                 true 100 true false)
+          (== result valid))
+        (conj
+          (probe (all-checks-passo len ca cb cc cd ce cf cg ch)
+                 false 100 true false)
+          (== result (invalid len ca cb cc cd ce cf cg ch)))))))
+
+; main: shuffle the fixed 16-value multiset with seed 42, then check
+; validity. Also run with a second seed (7) to spot-check a different
+; shuffle is also valid, since a single seed passing could theoretically
+; be a coincidence of that specific seed's swap sequence.
+(defrel (main args ops)
+  (fresh (multiset shuffled1 seed1 result1
+          shuffled2 seed2 result2
+          ops0 ops1)
+    (conj
+      (== multiset (a a b b c c d d e e f f g g h h))
+      (shuffleo multiset 42 15 shuffled1 seed1)
+      (valid-boardo shuffled1 result1)
+      (shuffleo multiset 7 15 shuffled2 seed2)
+      (valid-boardo shuffled2 result2)
+      (cons-ops (output (seed42-shuffle shuffled1)) (no-ops) ops0)
+      (cons-ops (output (seed42-valid result1)) ops0 ops1)
+      (cons-ops (output (seed7-shuffle shuffled2)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

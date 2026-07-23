@@ -11,7 +11,10 @@ bug class is discovered.*
 
 - `==` — unification
 - `fresh` — introduce logic variables, e.g. `(fresh (x y) body)`
-- `disj` — disjunction (OR); explores all branches
+- `disj` — disjunction (OR); explores all branches. **Also requires at
+  least 2 arguments**, same as `conj` below — both are enforced by the
+  same parser check. `(disj (== q foo))` fails with `[compile_goal]
+  ERROR: 'disj' requires at least 2 args`.
 - `conj` — conjunction (AND); **requires at least 2 arguments** — a
   single-argument `conj` is a compile error (`'conj' requires at least
   2 args`). If you only have one goal, don't wrap it in `conj` at all.
@@ -46,10 +49,17 @@ pure-relational Peano numerals:
 - `addo a b c` — `a + b = c`
 - `subo a b c` — `a - b = c`
 - `mulo a b c` — `a * b = c`
+- `leqo`, `lto`, `gto`, `eqo`, `geqo`, `neqo` — comparisons (≤, <, >,
+  =, ≥, ≠ respectively). All accept constraint-mode arguments (one
+  bound, one unbound).
 - `divo a b q r` — `a / b = q remainder r`, floor-division semantics
-  (result satisfies `0 <= r < b` even for negative inputs)
-- `modo a b r` — `a mod b = r`, floor-division semantics
-- `leqo`, `lto`, `gto`, `eqo` — comparisons
+  (result satisfies `0 <= r < b` even for negative dividends). **`b`
+  must be strictly positive** — `divo 10 0 q r` and `divo 10 -1 q r`
+  both fail with no solutions. This is implied by `0 <= r < b` but
+  easy to miss, especially if you read "even for negative inputs" as
+  covering negative `b` too — it doesn't.
+- `modo a b r` — `a mod b = r`, floor-division semantics, same `b > 0`
+  requirement as `divo`.
 - **Overflow**: these now correctly FAIL (not silently wrap) if a
   true result doesn't fit in `int32`. This was not always true (see
   Part 4, "Silent integer overflow").
@@ -292,9 +302,12 @@ stack trace) rather than a third round of the same static approach.
   matches `Condition`.
 - `Budget` — max iteration count (a plain integer, e.g. `100`).
 - `Sandbox` — `true`/`false`. When `true`, `Goal`'s internal variable
-  bindings do not propagate outward. Use `true` almost always when
-  you only care about success/failure, not about what `Goal` bound
-  internally.
+  bindings do not propagate outward, **and** any `cons-ops`/`add`/
+  `remove`/`output` ChangeSet operations `Goal` generates internally
+  are also isolated and do not leak into the outer ChangeSet (verified
+  by `test_stage2.cpp`'s "sandboxed probe op excluded" test). Use
+  `true` almost always when you only care about success/failure, not
+  about what `Goal` bound or attempted internally.
 - `ReqGround` — `true`/`false`. When `true`, unground variables in
   `Goal` short-circuit to `insufficient` before evaluation begins.
   Usually `false` unless you specifically need this.

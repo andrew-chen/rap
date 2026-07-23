@@ -1,0 +1,154 @@
+; test_shuffle.rap — isolated test of swap-nth and shuffleo, the new
+; logic needed to turn a fixed value-multiset into a randomly
+; positioned board using the LCG from prng.rap.
+;
+; Scope: verify list-index swapping and Fisher-Yates shuffling alone,
+; against hand-computable seeds, before wiring either into
+; memory_stage2_5.rap's board generation. Same isolation discipline as
+; every other genuinely new piece of logic in this project.
+;
+; Dependencies: copies in lcg-nexto and lcg-rangeo from prng.rap,
+; verbatim, since prng.rap's own lcg-seqo/main are not needed here.
+;
+; Run with: ./raprunner test_shuffle.rap < /dev/null
+
+;; --- copied verbatim from prng.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+;; --- new for shuffle support ---
+
+; nth-ato: given a list and an index, get the value at that index
+; (0-indexed). Fails if index is out of range. Plain structural
+; recursion over the list, same style as valueato/belief-ato.
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+; set-nth-ato: given a list, an index, and a new value, produce a new
+; list identical to the input except position idx holds new-val. Uses
+; the same disj-with-explicit-guards structure as reveal-ato-acc
+; (mutually exclusive via the counter reaching 0 vs. not, not via any
+; unconditional fallback -- deliberately checked against the disj-
+; exclusivity lesson from Part 2 of the programming guide before
+; being considered correct).
+(defrel (set-nth-ato lst idx new-val result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result (new-val . tail)))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (set-nth-ato tail idx1 new-val new-tail)
+          (== result (head . new-tail)))))))
+
+; swap-nth: given a list and two indices, produce a new list with the
+; values at those two indices exchanged. Handles idx1 == idx2 as a
+; no-op (swapping a position with itself).
+(defrel (swap-nth lst idx1 idx2 result)
+  (fresh (val1 val2 mid)
+    (conj
+      (nth-ato lst idx1 val1)
+      (nth-ato lst idx2 val2)
+      (set-nth-ato lst idx1 val2 mid)
+      (set-nth-ato mid idx2 val1 result))))
+
+; shuffleo: Fisher-Yates. Given a list, a seed, and the current
+; top index i (start at length-1, count down to 0), produce the
+; shuffled result and the final seed (for threading onward).
+; At i=0, nothing left to shuffle against, so just stop.
+(defrel (shuffleo lst seed i result final-seed)
+  (disj
+    (conj (eqo i 0) (== result lst) (== final-seed seed))
+    (fresh (i1 bound next j swapped)
+      (conj
+        (gto i 0)
+        (subo i 1 i1)
+        (addo i 1 bound)
+        (lcg-rangeo seed bound next j)
+        (swap-nth lst i j swapped)
+        (shuffleo swapped next i1 result final-seed)))))
+
+;; --- test cases ---
+
+; TEST 1 -- nth-ato / set-nth-ato sanity, no randomness at all.
+; list = (a b c d), get index 2 (expect c), set index 1 to z
+; (expect (a z c d)).
+;
+; TEST 2 -- swap-nth sanity, no randomness.
+; list = (a b c d), swap indices 0 and 3 (expect (d b c a)).
+; Also test idx1 == idx2 (swap 1 with 1, expect no change).
+;
+; TEST 3 -- shuffleo, with a FIXED, hand-computable seed, so the
+; exact output can be checked by hand-tracing lcg-nexto the same way
+; prng.rap's own output was hand-verified. list = (1 2 3 4 5), seed
+; = 42 (same seed used in prng.rap's own main, whose sequence is
+; already known: 12219, 8456, 52513, 18646, 21943 for successive
+; lcg-nexto calls from seed 42).
+;
+; Expected output (Test 3 hand-traced below, not left for the runner
+; to verify blind):
+;
+; Hand trace of shuffleo((1 2 3 4 5), seed=42, i=4):
+;   i=4, bound=5: lcg-next(42)=12219, j=12219 mod 5=4 -- swap(4,4) no-op
+;     -> list=(1 2 3 4 5), seed=12219
+;   i=3, bound=4: lcg-next(12219)=8456, j=8456 mod 4=0 -- swap(3,0)
+;     -> list=(4 2 3 1 5), seed=8456
+;   i=2, bound=3: lcg-next(8456)=52513, j=52513 mod 3=1 -- swap(2,1)
+;     -> list=(4 3 2 1 5), seed=52513
+;   i=1, bound=2: lcg-next(52513)=18646, j=18646 mod 2=0 -- swap(1,0)
+;     -> list=(3 4 2 1 5), seed=18646
+;   i=0: stop.
+; Final: shuffled=(3 4 2 1 5), final-seed=18646
+; (these next_seed values, 12219/8456/52513/18646, match prng.rap's
+; own previously-verified output from seed 42 exactly -- a useful
+; cross-check that lcg-nexto is being reused correctly here)
+;
+;   (test1-get-idx2 c)
+;   (test1-set-idx1 (a z c d))
+;   (test2-swap-0-3 (d b c a))
+;   (test2-swap-self-noop (a b c d))
+;   (test3-shuffle-result (3 4 2 1 5) 18646)
+(defrel (main args ops)
+  (fresh (lst1 got1 set1
+          lst2 swapped1 swapped2
+          lst3 shuffled final-seed
+          ops0 ops1 ops2 ops3)
+    (conj
+      (== lst1 (a b c d))
+      (nth-ato lst1 2 got1)
+      (set-nth-ato lst1 1 z set1)
+
+      (== lst2 (a b c d))
+      (swap-nth lst2 0 3 swapped1)
+      (swap-nth lst2 1 1 swapped2)
+
+      (== lst3 (1 2 3 4 5))
+      (shuffleo lst3 42 4 shuffled final-seed)
+
+      (cons-ops (output (test1-get-idx2 got1)) (no-ops) ops0)
+      (cons-ops (output (test1-set-idx1 set1)) ops0 ops1)
+      (cons-ops (output (test2-swap-0-3 swapped1)) ops1 ops2)
+      (cons-ops (output (test2-swap-self-noop swapped2)) ops2 ops3)
+      (cons-ops (output (test3-shuffle-result shuffled final-seed)) ops3 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
