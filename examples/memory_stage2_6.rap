@@ -288,12 +288,11 @@
 ; behind the new attempts) or does nothing further.
 (defrel (enqueue-flip-known-matcheso agenda args ops)
   (fresh (belief status-id board matched counter new-pairs
-          attempt-ops ops0 ops1 ops2 dbg0)
+          attempt-ops ops0 ops1 ops2)
     (conj
       (== args (belief-state belief))
       (find-taggedo agenda (output-status board matched counter) status-id)
       (find-new-matches-collecto belief matched new-pairs)
-      (cons-ops (output (dbg-new-pairs belief matched new-pairs)) (no-ops) dbg0)
       (disj
         (conj
           (== new-pairs ())

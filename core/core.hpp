@@ -578,8 +578,12 @@ inline Term deep_copy_term(Arena& dest, Term t) {
       if (!t.pair) return t;
       PairNode* p = dest.make<PairNode>();
       if (!p) return Term::nil();
-      p->car = deep_copy_term(dest, t.pair->car);
-      p->cdr = deep_copy_term(dest, t.pair->cdr);
+      // Save both fields before any recursive write can overwrite source memory
+      // when destination overlaps source (e.g. agenda compaction).
+      Term car = t.pair->car;
+      Term cdr = t.pair->cdr;
+      p->car = deep_copy_term(dest, car);
+      p->cdr = deep_copy_term(dest, cdr);
       return Term::make_pair(p);
     }
     default:
