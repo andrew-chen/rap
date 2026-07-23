@@ -22,34 +22,40 @@
 ; plan as currently scoped needs it.
 
 ; lcg-nexto: given the current seed, produce the next pseudorandom state.
-; next = (1103515245 * seed + 12345) mod 2147483647
+; next = (32765 * seed + 12345) mod 65536
 ;
-; NOTE: modulus is 2147483647 (2^31 - 1, a Mersenne prime, and the
-; largest value representable in int32), NOT 2147483648 (2^31, which
-; is INT32_MAX + 1 and cannot be represented as a Term::Int at all —
-; caught during review before this ever got tested). This also means
-; the classic ANSI C constants (mod 2^31) are slightly off their
-; textbook form, but remain a perfectly reasonable LCG for
-; non-cryptographic antagonist move selection.
+; These constants were chosen and verified by hand (not copied from a
+; textbook LCG) specifically to stay within int32 range now that the
+; engine correctly FAILS on overflow rather than silently wrapping
+; (see the divmodo/multaddiso overflow fix). The classic ANSI-C-style
+; constants (multiplier ~1.1 billion, modulus 2^31) are fundamentally
+; incompatible with int32 arithmetic: multiplier * seed alone
+; overflows int32 for any seed > 1, so those constants would now fail
+; on virtually every call instead of silently producing wrong values
+; the way they used to (this was caught empirically: prng.rap's first
+; version produced a wrong wrapped value with the old constants and
+; the pre-fix engine, and would now correctly fail outright with the
+; post-fix engine instead).
 ;
-; CAUTION, NOT YET VERIFIED: 1103515245 * seed can itself overflow
-; int32 well before the mod is applied, if seed is large (multiplier
-; is close to 2^30, so any seed above roughly 2 risks the true
-; product exceeding int32 range). handle_multaddiso computes products
-; using int64 intermediates internally, so this may already be handled
-; correctly — but this has NOT been confirmed against core.hpp, and
-; if seed values in practice approach the full int32 range this needs
-; explicit checking before relying on it. A conventional safer choice
-; if this turns out to be a problem: use a much smaller modulus (e.g.
-; 2^16 or 2^31-1 with a smaller multiplier chosen so multiplier*modulus
-; fits safely), or confirm handle_multaddiso's int64 path truncates
-; correctly back to the intended mathematical result rather than
-; silently wrapping.
+; Chosen instead: modulus m = 65536 (2^16), multiplier a = 32765,
+; increment c = 12345. This satisfies the Hull-Dobell theorem for a
+; power-of-two modulus (c is odd and coprime with m; (a-1) is
+; divisible by 4, since m is divisible by 4), guaranteeing full period
+; -- all 65536 states are visited before repeating, for any seed.
+; The worst-case product a*(m-1)+c = 2147266620, safely under
+; INT32_MAX = 2147483647 -- verified by hand, not assumed.
+;
+; This gives only a 16-bit-range PRNG (values 0-65535), not a full
+; 31-bit one. This is more than sufficient range for antagonist move
+; selection over a small board (Stage 3 needs to pick among at most
+; 16 positions), so the reduced range is not a practical limitation
+; here -- but note this if the PRNG is ever reused for a purpose
+; needing a larger output range.
 (defrel (lcg-nexto seed next)
   (fresh (product sum)
-    (mulo 1103515245 seed product)
+    (mulo 32765 seed product)
     (addo product 12345 sum)
-    (modo sum 2147483647 next)))
+    (modo sum 65536 next)))
 
 ; lcg-rangeo: given a seed, produce the next state AND a value bounded
 ; to [0, bound). Useful for e.g. picking a board position to swap.

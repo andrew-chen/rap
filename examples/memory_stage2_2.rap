@@ -1,0 +1,134 @@
+; memory_stage2_2.rap — Stage 2.2: confirmed matches from belief alone.
+;
+; Scope: a relation that succeeds only when belief has BOTH positions
+; already revealed and their values are equal. Critically, this must
+; FAIL (not error, not succeed-with-unknown) whenever either position
+; is still `unknown` -- "don't know yet" and "confirmed mismatch" are
+; different outcomes that later stages (attempt-scheduling in 2.5)
+; need to tell apart, so this stage exists specifically to nail down
+; that distinction in isolation, with no board and no agenda at all.
+;
+; Dependencies: copies in belief-ato and all-unknowno from
+; memory_stage2_0.rap, verbatim and unchanged. Does NOT need
+; reveal-ato or valueato from Stage 2.1/Stage 1 -- this stage only
+; ever reasons about belief states that are handed to it directly,
+; it never looks at ground truth itself.
+;
+; Run with: ./raprunner memory_stage2_2.rap < /dev/null
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+; belief-ato: given a belief state and a position, look up its status
+; there (either `unknown` or a revealed value). Fails if the position
+; isn't present in the belief state at all.
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+; all-unknowno: given a count n, produce a belief state of n entries,
+; positions 0 through n-1 in order, all with status `unknown`.
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+;; --- new for Stage 2.2 ---
+
+; confirmed-matcho: succeeds only when belief shows BOTH pos1 and
+; pos2 as revealed (not `unknown`) and their revealed values are
+; equal. Fails -- ordinary relational failure, no distinct error --
+; in all three other cases: either position still unknown, or both
+; revealed but different values.
+;
+; The two `=/= v1 unknown` / `=/= v2 unknown` guards are what make
+; "still unknown" and "confirmed mismatch" behave differently from
+; each other: without them, unifying v1 with v2 could in principle
+; succeed by both being `unknown` (an unknown "matching" an unknown),
+; which is NOT what this relation should report as a confirmed
+; match. Requiring both to be a real value (not the symbol `unknown`)
+; before comparing them is the crux of this stage.
+(defrel (confirmed-matcho belief pos1 pos2)
+  (fresh (v1 v2)
+    (conj
+      (=/= pos1 pos2)
+      (belief-ato belief pos1 v1)
+      (belief-ato belief pos2 v2)
+      (=/= v1 unknown)
+      (=/= v2 unknown)
+      (== v1 v2))))
+
+; main: standalone test covering all three belief-shape cases named
+; in the scope comment above, using one hand-written belief state
+; with a deliberate mix: position 0 and 2 both revealed and equal
+; (should confirm), position 0 and 1 both revealed but different
+; (should fail), and position 0 and 3 where 3 is still unknown
+; (should fail).
+;
+; report-matcho uses Probe to turn confirmed-matcho's success/failure
+; into an explicit yes/no-match term. An earlier draft of this file
+; tried to express this with a plain two-branch disj:
+;
+;   (disj
+;     (conj (confirmed-matcho belief pos1 pos2) (== result yes))
+;     (conj (=/= result yes) (== result no-match)))
+;
+; This is WRONG and was caught before being tested: the second
+; branch's condition (result =/= yes) does not actually depend on
+; confirmed-matcho failing -- result is a fresh, unbound variable at
+; call time, so (=/= result yes) is a deferred constraint that does
+; not itself fail just because confirmed-matcho happened to succeed
+; elsewhere in the search. Both branches can produce an answer
+; regardless of whether the match was actually confirmed, and which
+; one a single-answer `run 1` returns depends on search order, not on
+; correctness. This is exactly the kind of thing that could look like
+; a passing test while actually being accidentally right rather than
+; correctly right -- caught by tracing the logic by hand before
+; running it, not by running it and getting lucky.
+;
+; Probe (per the paper, Section 3.4/3.7) is RAP's actual mechanism
+; for turning a goal's success/failure into an explicit, inspectable
+; outcome, which is exactly what's needed here:
+;   (probe Goal Condition Budget Sandbox ReqGround)
+; Condition 'false' makes Probe succeed exactly when Goal fails.
+; sandbox=true so probing doesn't leak confirmed-matcho's internal
+; bindings (v1/v2 inside it) outward -- only whether it succeeded or
+; failed is observed, consistent with how the paper's Section 5.1
+; RBAC case study uses Probe to classify an outcome without needing
+; the underlying goal's bindings.
+(defrel (report-matcho belief pos1 pos2 result)
+  (disj
+    (conj
+      (probe (confirmed-matcho belief pos1 pos2) true 100 true false)
+      (== result yes))
+    (conj
+      (probe (confirmed-matcho belief pos1 pos2) false 100 true false)
+      (== result no-match))))
+
+; Expected output:
+;   (case-both-known-match yes)
+;   (case-both-known-mismatch no-match)
+;   (case-one-unknown no-match)
+(defrel (main args ops)
+  (fresh (belief r1 r2 r3 ops0 ops1)
+    (conj
+      (== belief ((0 . a) (1 . b) (2 . a) (3 . unknown)))
+      (report-matcho belief 0 2 r1)
+      (report-matcho belief 0 1 r2)
+      (report-matcho belief 0 3 r3)
+      (call cons-ops (output (case-both-known-match r1)) (no-ops) ops0)
+      (call cons-ops (output (case-both-known-mismatch r2)) ops0 ops1)
+      (call cons-ops (output (case-one-unknown r3)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

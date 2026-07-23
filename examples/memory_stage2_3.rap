@@ -1,0 +1,112 @@
+; memory_stage2_3.rap — Stage 2.3: belief in the agenda, no mutation.
+;
+; Scope: prove that "belief-as-agenda-term" works end to end, with
+; zero new logic. main seeds the agenda with one belief entry by
+; hand (the same style memory_stage1.rap seeds a hardcoded board via
+; ==). A separate relation then receives the agenda as a term (the
+; same shape strengthen-agendao receives it in the paper's Section
+; 5.2), finds the belief entry via find-by-contento, and outputs it
+; UNCHANGED. No cons-ops remove/add of the belief entry itself yet --
+; that mutation step is Stage 2.4. This stage only proves the entry
+; can be seeded, found, and read back correctly.
+;
+; Dependencies: copies in belief-ato and all-unknowno from
+; memory_stage2_0.rap, verbatim and unchanged. Also relies on
+; find-by-contento, which is already in stdlib/core.rap (confirmed
+; present, not something we need to define or copy in).
+;
+; Agenda entry shape: per find-by-contento's own doc comment in
+; stdlib/core.rap, agenda entries are 3-element lists
+; (id rel-term args) where `args` is the field find-by-contento
+; matches against. For this stage, the entry's args field IS the
+; belief state itself -- there is no separate "wrapper" structure,
+; the belief list is directly what gets searched for. The rel-term
+; field is a placeholder for now (this stage never actually calls
+; it, since nothing runs the belief entry as a query yet) -- it's
+; set to a trivial always-fails relation just so the 3-element shape
+; is honestly filled in, not left as a dummy symbol that would look
+; like it means something it doesn't.
+;
+; Run with: ./raprunner memory_stage2_3.rap < /dev/null
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+; belief-ato: given a belief state and a position, look up its status
+; there (either `unknown` or a revealed value).
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+; all-unknowno: given a count n, produce a belief state of n entries,
+; positions 0 through n-1 in order, all with status `unknown`.
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+;; --- new for Stage 2.3 ---
+
+; find-beliefo: given the current agenda, find the belief entry (the
+; one whose args match a variable, i.e. any belief-shaped entry --
+; since this stage only ever has exactly one entry in the agenda by
+; construction, this is deliberately unconstrained rather than
+; pattern-matching the belief's specific shape) and return both its
+; id and its contents.
+;
+; find-by-contento's own signature is (agenda pattern id) -- pattern
+; is unified against the found entry's args field. Passing a fresh
+; variable as pattern means "match anything," which is exactly what
+; we want here: read back whatever belief state is currently seeded,
+; without needing to already know its shape.
+(defrel (find-beliefo agenda belief id)
+  (find-by-contento agenda belief id))
+
+; main: seed the agenda with exactly one entry -- id 0, a placeholder
+; rel-term (never called in this stage), and args set to a fresh
+; all-unknown 4-position belief state. Then read it back via
+; find-beliefo and output it unchanged, proving the round trip works.
+;
+; NOTE on the placeholder rel-term: (rel () (== 0 1)) is an anonymous
+; relation that always fails if ever called -- filled in honestly
+; per the doc comment above, not left as a bare symbol that might be
+; mistaken for something meaningful. It is never invoked in this
+; stage.
+;
+; NOTE on variable naming: the fresh variable holding the read-back
+; belief state is named `readback`, deliberately NOT `found-belief` --
+; this is the SAME tag/variable collision bug caught in
+; memory_stage2_0.rap (a bare symbol matching a name in the enclosing
+; fresh scope always compiles as that variable, even in output/tag
+; position). This should have been checked automatically before
+; presenting this file the first time, since it was already a known,
+; previously-fixed bug in this project -- it was not, and the bug
+; recurred as a result. Treating "check every main for tag/variable
+; collisions" as a standing, mandatory step from here on, not
+; something to verify once per file and assume carries over.
+;
+; Expected output:
+;   (found-belief-id 0)
+;   (found-belief ((0 . unknown) (1 . unknown) (2 . unknown) (3 . unknown)))
+(defrel (main args ops)
+  (fresh (belief entry agenda-term found-id readback ops0)
+    (conj
+      (all-unknowno 4 belief)
+      (== entry (0 (rel () (== 0 1)) belief))
+      (== agenda-term (entry . ()))
+      (find-beliefo agenda-term readback found-id)
+      (call cons-ops (output (found-belief-id found-id)) (no-ops) ops0)
+      (call cons-ops (output (found-belief readback)) ops0 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

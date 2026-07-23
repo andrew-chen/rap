@@ -1,0 +1,183 @@
+; memory_stage2_4.rap — Stage 2.4: belief updates via real cons-ops.
+;
+; Scope: combine Stage 2.1's reveal-ato (compute an updated belief
+; state from ground truth) with Stage 2.3's agenda plumbing (find the
+; belief entry in the agenda), and this time actually MUTATE the
+; agenda: remove the old belief entry, add a new one with the
+; revealed position updated. This is the same remove-then-add pattern
+; wc-counter uses in wc.rap to thread its running chars/words/lines
+; counts forward -- confirmed working there, reused here unchanged.
+;
+; Still a single manual flip, driven by main -- this is not yet the
+; full attempt-scheduling loop (that's 2.5/2.6). The goal here is
+; narrowly: does one real cons-ops remove+add correctly replace the
+; agenda's belief entry with an updated one, leaving the rest of the
+; agenda (if anything else were in it) untouched.
+;
+; Dependencies: copies in valueato (Stage 1), belief-ato, all-unknowno
+; (Stage 2.0), and reveal-ato (Stage 2.1), verbatim and unchanged.
+;
+; Run with: ./raprunner memory_stage2_4.rap < /dev/null
+
+;; --- copied verbatim from memory_stage1.rap ---
+
+(defrel (valueato board pos val)
+  (fresh (rest p v)
+    (== board ((p . v) . rest))
+    (disj
+      (conj (== p pos) (== v val))
+      (valueato rest pos val))))
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+;; --- copied verbatim from memory_stage2_1.rap ---
+
+(defrel (reveal-ato belief pos board new-belief)
+  (fresh (true-val)
+    (conj
+      (valueato board pos true-val)
+      (reveal-ato-acc belief pos true-val new-belief))))
+
+(defrel (reveal-ato-acc belief pos true-val new-belief)
+  (disj
+    (conj (== belief ()) (== new-belief ()))
+    (fresh (p s rest new-rest)
+      (conj
+        (== belief ((p . s) . rest))
+        (disj
+          (conj
+            (== p pos)
+            (== new-belief ((p . true-val) . new-rest))
+            (== new-rest rest))
+          (conj
+            (=/= p pos)
+            (== new-belief ((p . s) . new-rest))
+            (reveal-ato-acc rest pos true-val new-rest)))))))
+
+;; --- new for Stage 2.4 ---
+
+; find-beliefo: as in Stage 2.3 -- find the (only) belief-holding
+; entry in the agenda, returning its contents and id. Used by
+; kickoffo to locate Entry B for removal.
+(defrel (find-beliefo agenda belief id)
+  (find-by-contento agenda belief id))
+
+; belief-entryo: the relation used for BOTH Entry B (seeded by main,
+; holding the initial belief, but removed by kickoffo before it ever
+; gets a turn to run) and "second prime" (added by kickoffo in
+; Entry B's place, holding the already-flipped belief). There is no
+; need for two different relations here -- if Entry B had been left
+; alone to run, this is exactly the body it would have executed;
+; choosing to remove it before that happens (via kickoffo) rather
+; than letting it run on its own is what lets this test distinguish
+; "add really works" from "the loop happened to advance somehow."
+;
+; When run: flips position 2 against the fixed board, removes
+; itself, adds a new belief-entryo entry holding the flipped belief,
+; and outputs the flipped belief so its execution is directly
+; observable. Position 2 and the board are hardcoded here for this
+; stage's test -- real position selection is Stage 2.5's job.
+(defrel (belief-entryo agenda args ops)
+  (fresh (board new-belief ops0 ops1 self-belief self-id)
+    (conj
+      (== board ((0 . a) (1 . b) (2 . c) (3 . d)))
+      (reveal-ato args 2 board new-belief)
+      (cons-ops (output (belief-entryo-ran new-belief)) (no-ops) ops0)
+      (find-beliefo agenda self-belief self-id)
+      (cons-ops (remove self-id) ops0 ops1)
+      (cons-ops
+        (add (rel (a r) (call belief-entryo a r)) new-belief)
+        ops1 ops))))
+
+; kickoffo: Entry A. Runs once, finds Entry B (the belief-entryo
+; instance seeded by main) and removes it WITHOUT ever letting it
+; run its own body, adds a fresh belief-entryo instance in its place
+; ("second prime", holding a fresh all-unknown belief -- kickoffo
+; does not need to have flipped anything itself, belief-entryo will
+; do the flip once IT runs), and outputs a marker proving kickoffo
+; itself executed. This is what directly demonstrates: (a) add/
+; remove both work for real, through the actual reactive loop, and
+; (b) the loop really does advance past a single step, since
+; belief-entryo's own "ran" output can only appear on some LATER
+; step after kickoffo's.
+(defrel (kickoffo agenda args ops)
+  (fresh (old-belief old-id fresh-belief ops0 ops1)
+    (conj
+      (find-beliefo agenda old-belief old-id)
+      (all-unknowno 4 fresh-belief)
+      (cons-ops (output (kickoffo-ran old-id)) (no-ops) ops0)
+      (cons-ops (remove old-id) ops0 ops1)
+      (cons-ops
+        (add (rel (a r) (call belief-entryo a r)) fresh-belief)
+        ops1 ops))))
+
+; main: seed the agenda with BOTH Entry A (kickoffo) and Entry B
+; (belief-entryo, holding an initial all-unknown belief), in a
+; single ChangeSet, via two chained add ops -- plus, per direct
+; feedback, an explicit output of main's own so main's execution is
+; directly confirmed too, not just inferred from downstream output
+; (or its absence). Entry B is added first here purely so its id (0)
+; is easy to reason about by hand; add order does not otherwise
+; matter since both entries are genuinely independent, runnable
+; agenda entries from the moment this ChangeSet is applied -- neither
+; is a placeholder, per the standing rule that every agenda entry
+; must be runnable by construction.
+;
+; NOTE on `call`: earlier drafts wrote (call cons-ops ...) everywhere,
+; following wc.rap's own usage literally. Per direct feedback, this is
+; unnecessary -- cons-ops, like every other relation in this project
+; (belief-ato, reveal-ato, etc.), can be referred to directly without
+; the call wrapper. wc.rap's own (call cons-ops ...) usage is not
+; wrong, just more verbose than needed; dropped here throughout for
+; consistency with how every other relation call in this file already
+; looks. `call` is still required specifically for invoking an
+; anonymous `rel` TERM value (e.g. `(call belief-entryo a r)` inside
+; an added rel closure) -- that is a different situation, calling a
+; first-class relation value rather than a named relation directly in
+; source.
+;
+; Expected output, across however many reactive-loop steps it takes
+; to run main, then kickoffo, then the belief-entryo it adds:
+;   (main-ran yes)
+;   (kickoffo-ran <id-of-original-entry-b>)
+;   (belief-entryo-ran ((0 . unknown) (1 . unknown) (2 . c) (3 . unknown)))
+; Seeing all three lines confirms: main itself ran and produced its
+; ChangeSet; kickoffo really ran and really removed Entry B (never
+; seeing an output from the ORIGINAL Entry B's belief proves it was
+; removed before getting a turn); the "second prime" belief-entryo
+; really got added and really ran on some later step; and the flip
+; logic inside belief-entryo is correct.
+(defrel (main args ops)
+  (fresh (initial-belief ops0 ops1)
+    (conj
+      (all-unknowno 4 initial-belief)
+      (cons-ops (output (main-ran yes)) (no-ops) ops0)
+      (cons-ops
+        (add (rel (a r) (call belief-entryo a r)) initial-belief)
+        ops0 ops1)
+      (cons-ops
+        (add (rel (a r) (call kickoffo a r)) ())
+        ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

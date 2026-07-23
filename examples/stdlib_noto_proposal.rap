@@ -1,0 +1,68 @@
+;; Negation-as-failure, built on Probe.
+;;
+;; This section is a PROPOSED ADDITION to stdlib/core.rap, not yet
+;; merged. It factors out a pattern first written inline in
+;; memory_stage2_2.rap's report-matcho relation and confirmed working
+;; against the actual engine (2026 — see project history: this was
+;; the first real end-to-end test of Probe's surface syntax anywhere
+;; in this codebase, and it worked exactly as documented on the first
+;; try).
+;;
+;; (noto Goal) succeeds exactly when Goal fails, and fails exactly
+;; when Goal succeeds -- ordinary negation-as-failure, with the same
+;; caveats Probe already documents in the paper (Section 3.4): this is
+;; NOT full relational negation. It will not terminate, or will return
+;; `bounded` rather than a clean answer, if Goal itself would not
+;; terminate within the given budget. Callers that need to distinguish
+;; "confirmed false" from "couldn't determine" should use Probe
+;; directly with all four outcomes, rather than noto, which collapses
+;; insufficient/bounded into ordinary failure (see boundedo/noto-strict
+;; below for a variant that does NOT collapse those).
+;;
+;; sandbox is always true: noto's whole point is to check whether Goal
+;; succeeds or fails WITHOUT letting any of its internal bindings leak
+;; outward -- if you need those bindings, negation-as-failure is
+;; probably the wrong tool for what you're doing.
+
+; (noto goal) — succeeds iff goal fails. Default budget: 1000 steps.
+; Uses noto-budgeto internally with a fixed default; see below for a
+; variant that lets the caller specify the budget explicitly.
+(defrel (noto goal)
+  (noto-budgeto goal 1000))
+
+; (noto-budgeto goal budget) — succeeds iff goal fails within budget
+; steps. If goal is neither confirmed true nor confirmed false within
+; budget (i.e. Probe would report `insufficient` or `bounded`), this
+; relation FAILS -- it does not distinguish "confirmed true" from
+; "could not determine," collapsing both into "not confirmed false."
+; This is a deliberate simplification for the common case; see
+; noto-strict below if that distinction matters to the caller.
+(defrel (noto-budgeto goal budget)
+  (probe goal false budget true false))
+
+;; --- Variant that does not collapse insufficient/bounded ---
+;;
+;; noto-strict makes the difference between "confirmed false" and
+;; "ran out of budget / insufficient info" visible to the caller,
+;; rather than treating both as ordinary success. Use this whenever
+;; silently treating "couldn't tell" the same as "definitely true"
+;; would be a correctness problem -- e.g. Stage 3's antagonist
+;; probably wants this form, not plain noto, if it ever needs to
+;; reason about whether it's SAFE to assume something is false.
+
+; (noto-strict goal budget outcome) — outcome is unified with one of
+; the symbols `confirmed-false`, `confirmed-true`, or `indeterminate`.
+; `indeterminate` covers both Probe's `insufficient` and `bounded`
+; outcomes, since noto-strict's caller usually wants to treat both the
+; same way (can't safely conclude anything), but reports it explicitly
+; rather than silently failing or silently succeeding either way.
+(defrel (noto-strict goal budget outcome)
+  (disj
+    (conj (probe goal false budget true false) (== outcome confirmed-false))
+    (conj (probe goal true budget true false) (== outcome confirmed-true))
+    (conj
+      (probe goal insufficient budget true false)
+      (== outcome indeterminate))
+    (conj
+      (probe goal bounded budget true false)
+      (== outcome indeterminate))))

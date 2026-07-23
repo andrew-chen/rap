@@ -1,0 +1,120 @@
+; memory_stage2_1.rap — Stage 2.1: flipping one position.
+;
+; Scope: a relation that looks up a position's true value in a fully-
+; known ground-truth board, and produces an updated belief state with
+; that one position revealed, leaving every other entry unchanged.
+; Still no agenda involvement -- that's Stage 2.3/2.4. This stage is
+; purely about getting "look at ground truth, update belief" correct
+; in isolation, via plain (run ...) queries.
+;
+; Dependencies: copies in valueato from memory_stage1.rap and the
+; belief relations from memory_stage2_0.rap, verbatim and unchanged,
+; since there is currently no cross-file relation-reference mechanism
+; (a real module system is a longer-term goal, out of scope for now).
+;
+; Run with: ./raprunner memory_stage2_1.rap < /dev/null
+
+;; --- copied verbatim from memory_stage1.rap ---
+
+; valueato: given a board and a position, look up the value there.
+; Fails if the position isn't in the board at all.
+(defrel (valueato board pos val)
+  (fresh (rest p v)
+    (== board ((p . v) . rest))
+    (disj
+      (conj (== p pos) (== v val))
+      (valueato rest pos val))))
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+; belief-ato: given a belief state and a position, look up its status
+; there (either `unknown` or a revealed value). Fails if the position
+; isn't present in the belief state at all.
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+; all-unknowno: given a count n, produce a belief state of n entries,
+; positions 0 through n-1 in order, all with status `unknown`.
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+;; --- new for Stage 2.1 ---
+
+; reveal-ato: given a belief state, the position being flipped, and
+; the ground-truth board, produce a new belief state identical to the
+; input except that `pos`'s entry is updated to the real value looked
+; up from `board`. Every other entry is carried through unchanged,
+; in the same order.
+;
+; This does NOT check whether `pos` was previously `unknown` --
+; flipping an already-revealed position just re-confirms the same
+; value (valueato is deterministic per position on a well-formed
+; board, so this is harmless, not a bug). Whether the caller SHOULD
+; ever flip an already-known position is a policy question for the
+; attempt-scheduling stage (2.5), not something reveal-ato itself
+; needs to prevent.
+(defrel (reveal-ato belief pos board new-belief)
+  (fresh (true-val)
+    (conj
+      (valueato board pos true-val)
+      (reveal-ato-acc belief pos true-val new-belief))))
+
+(defrel (reveal-ato-acc belief pos true-val new-belief)
+  (disj
+    (conj (== belief ()) (== new-belief ()))
+    (fresh (p s rest new-rest)
+      (conj
+        (== belief ((p . s) . rest))
+        (disj
+          (conj
+            (== p pos)
+            (== new-belief ((p . true-val) . new-rest))
+            (== new-rest rest))
+          (conj
+            (=/= p pos)
+            (== new-belief ((p . s) . new-rest))
+            (reveal-ato-acc rest pos true-val new-rest)))))))
+
+; main: standalone test. Build a small 4-position board and an
+; all-unknown belief state, flip position 2, and report the belief
+; state before and after -- confirming position 2 changed to the
+; correct value and positions 0, 1, 3 remained `unknown`.
+;
+; Board: position 2 holds value 'c'.
+;
+; Expected output:
+;   (belief-before ((0 . unknown) (1 . unknown) (2 . unknown) (3 . unknown)))
+;   (belief-after ((0 . unknown) (1 . unknown) (2 . c) (3 . unknown)))
+;
+; NOTE: fresh variables here are named beforeb/afterb, not
+; belief-before/belief-after, to avoid the exact tag/variable
+; collision bug caught and fixed in memory_stage2_0.rap -- a bare
+; symbol matching a name in the current fresh scope always compiles
+; as that variable, even in tag position, so the output tags
+; belief-before/belief-after must not also be used as fresh variable
+; names anywhere in this defrel.
+(defrel (main args ops)
+  (fresh (board beforeb afterb ops0)
+    (conj
+      (== board ((0 . a) (1 . b) (2 . c) (3 . d)))
+      (all-unknowno 4 beforeb)
+      (reveal-ato beforeb 2 board afterb)
+      (call cons-ops (output (belief-before beforeb)) (no-ops) ops0)
+      (call cons-ops (output (belief-after afterb)) ops0 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

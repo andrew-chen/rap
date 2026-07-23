@@ -1,0 +1,83 @@
+; memory_stage2_0.rap — Stage 2.0: belief representation only.
+;
+; Scope: this stage settles how a belief state is represented as a
+; term, and provides a lookup relation over it. No board, no ground
+; truth, no agenda, no flipping. Deliberately does not depend on any
+; relation from memory_stage1.rap (Option B: no duplication, no
+; unneeded coupling — this stage genuinely doesn't need valueato,
+; matchingo, or solveo).
+;
+; Run with: ./raprunner memory_stage2_0.rap < /dev/null
+
+; Belief representation: a list of (pos . status) pairs, one entry
+; per board position, where status is either the symbol `unknown` or
+; a revealed value symbol (a-h). This mirrors the board representation
+; from Stage 1 ((pos . value) pairs) deliberately, so later stages
+; that need to relate belief to the ground-truth board aren't
+; fighting two incompatible shapes.
+;
+; Example belief state, 4 positions, two revealed:
+;   ((0 . a) (1 . unknown) (2 . unknown) (3 . c))
+
+; belief-ato: given a belief state and a position, look up its status
+; there (either `unknown` or a revealed value). Fails if the position
+; isn't present in the belief state at all -- mirrors valueato's
+; failure behavior from Stage 1 for an absent position, kept
+; consistent on purpose even though this stage doesn't share code
+; with Stage 1.
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+; all-unknowno: given a count n, produce a belief state of n entries,
+; positions 0 through n-1 in order, all with status `unknown`. Used
+; to construct the starting belief state for a board of a given size,
+; without hand-writing every entry.
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+; Expected output:
+;   (belief-lookup-known a)
+;   (belief-lookup-unknown unknown)
+;   (fresh-belief ((0 . unknown) (1 . unknown) (2 . unknown) (3 . unknown)))
+;
+; NOTE: the fresh logic variable holding the constructed belief state
+; is named `belief4` here, deliberately NOT `fresh-belief` — a bare
+; symbol that matches a name currently in scope via `fresh` is always
+; compiled as a reference to that variable, even in output/tag
+; position (confirmed against sexp_parser.hpp's unconditional
+; bound/global symbol lookup on every bare Sym node). An earlier draft
+; of this file used `fresh-belief` for both the variable name and the
+; output tag, which silently compiled (fresh-belief fresh-belief) as
+; two references to the same variable rather than (tag data) --
+; producing a doubled, untagged pair instead of a tagged one. Output
+; tags must always be spelled to avoid colliding with anything in the
+; enclosing fresh scope, the same convention wc.rap and the paper's
+; examples already follow (e.g. `counted`, `pruned`) without it having
+; been written down as an explicit rule until now.
+(defrel (main args ops)
+  (fresh (belief status1 status2 belief4 ops0 ops1)
+    (conj
+      (== belief ((0 . a) (1 . unknown) (2 . c) (3 . unknown)))
+      (belief-ato belief 0 status1)
+      (belief-ato belief 1 status2)
+      (all-unknowno 4 belief4)
+      (call cons-ops (output (belief-lookup-known status1)) (no-ops) ops0)
+      (call cons-ops (output (belief-lookup-unknown status2)) ops0 ops1)
+      (call cons-ops (output (fresh-belief belief4)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
