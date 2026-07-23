@@ -28,9 +28,14 @@ static Term parse_term(RapLoop& loop, Arena& tmp, const char* str) {
 }
 
 // ============================================================================
-// Build a minimal 1-param RelNode with trivial body (== BVar(0) BVar(0)).
-// Used as the rel_term for state-holding agenda entries; content is passed
-// separately as the published args to agenda.enqueue().
+// Build a minimal 3-param RelNode with trivial body (== BVar(0) BVar(0)).
+//
+// param_count=3 follows the (agenda args ops) convention: BVar(0)=agenda,
+// BVar(1)=entry's data args, BVar(2)=ops.  The body trivially succeeds and
+// does not bind ops, producing an empty ChangeSet if the entry is ever run.
+// This is deliberately inert — the test's purpose is to verify strengthen-
+// agendao removes the right subset; these entries are just placeholders that
+// won't interfere regardless of dequeue order.
 // ============================================================================
 static Term make_minimal_rel(Arena& stable) {
     Term bv0; bv0.tag = TermTag::BVar; bv0.id = 0;
@@ -42,7 +47,7 @@ static Term make_minimal_rel(Arena& stable) {
 
     RelNode* rn = stable.make<RelNode>();
     if (!rn) return Term::nil();
-    rn->param_count = 1;
+    rn->param_count = 3;  // (agenda args ops) — satisfies enqueue's {2,3} check
     rn->body        = body;
 
     return Term::relation(rn);
@@ -123,23 +128,31 @@ int main() {
     // -------------------------------------------------------------------------
     // Set up the test agenda.
     //
-    // Enqueue strengthen-agendao FIRST (it will be at the front of the queue),
-    // then set next_id=10 and enqueue the 4 state-holder entries. When run_one()
-    // dequeues strengthen-agendao, the remaining agenda is:
+    // Enqueue strengthen-agendao FIRST (it will be at the front of the FIFO
+    // queue), then set next_id=10 and enqueue the 4 3-param data entries.
+    // All entries are genuinely runnable (no state-holder distinction).
+    //
+    // When run_one() dequeues strengthen-agendao (FIFO front), the remaining
+    // agenda presented to it is:
     //   [id=10: (10 minimal-rel (check  hypA test1)),
     //    id=11: (11 minimal-rel (check+ hypA test1 refineX)),
     //    id=12: (12 minimal-rel (check  hypA test1)),
     //    id=13: (13 minimal-rel (explore hypB 2))]
     // strengthen-agendao finds id=11 as the strong check+ and emits
     // Remove(10), Remove(12), Output((pruned hypA test1)).
+    //
+    // Entries 11 and 13 survive (count=2 after run_one). If the reactive loop
+    // were to continue, they would each run and produce empty ChangeSets (their
+    // trivial body succeeds without binding ops) — they're genuinely inert, not
+    // relying on any state-holder mechanism to stay put.
     // -------------------------------------------------------------------------
 
-    // Enqueue strengthen-agendao first (2-param, nil args → runnable).
+    // Enqueue strengthen-agendao first (2-param, nil args).
     std::uint32_t sa_id = loop.enqueue_query("strengthen-agendao");
     EXPECT(sa_id != 0u, "strengthen-agendao enqueued");
     if (failed) { std::printf("\nAborting: enqueue_query failed.\n"); return 1; }
 
-    // Force the 4 state-holder entries to get ids 10-13.
+    // Force the 4 data entries to get ids 10-13.
     loop.agenda.next_id = 10;
 
     // Build content terms using our intern table so symbol pointers match.
@@ -156,11 +169,11 @@ int main() {
     EXPECT(content12.tag == TermTag::Pair, "content12 parsed");
     EXPECT(content13.tag == TermTag::Pair, "content13 parsed");
 
-    // Build a minimal Rel (1-param, trivial body) to use as the rel_term for
-    // all state-holder entries. Content is published separately as args.
+    // Build a minimal 3-param Rel (agenda args ops) to carry each content term.
+    // The trivial body produces an empty ChangeSet if dequeued and run.
     Term minimal_rel = make_minimal_rel(loop.intern_arena);
 
-    // Enqueue state-holders: args = content, non-nil → never dequeued as runnable.
+    // Enqueue with content as the middle (args) parameter.
     std::uint32_t id10 = loop.agenda.enqueue(minimal_rel, content10);
     std::uint32_t id11 = loop.agenda.enqueue(minimal_rel, content11);
     std::uint32_t id12 = loop.agenda.enqueue(minimal_rel, content12);
@@ -171,11 +184,11 @@ int main() {
     EXPECT(id12 == 12u, "item12 gets id=12");
     EXPECT(id13 == 13u, "item13 gets id=13");
 
-    // Agenda now: [sa (runnable), entry10-13 (state-holders)]
+    // Agenda now: [sa, entry10, entry11, entry12, entry13] — all 5 runnable.
     EXPECT(loop.agenda.count == 5u, "Agenda has 5 entries before run");
 
     // -------------------------------------------------------------------------
-    // Run strengthen-agendao (dequeued from front as the only runnable entry).
+    // Run strengthen-agendao (FIFO dequeue — it's at the front of the queue).
     // After execution, expect:
     //   - ChangeSet: Remove(10), Remove(12), Output((pruned hypA test1))
     //   - Agenda after apply: entry11 and entry13 remain (count=2)
