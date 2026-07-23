@@ -291,6 +291,44 @@ careful attempts hasn't converged on an answer, that's a signal to
 switch to empirical tracing (print statements, a debugger, a
 stack trace) rather than a third round of the same static approach.
 
+### 8. Isolated tests with small inputs can pass cleanly while a real
+   bug (or an insufficient constant) only manifests at realistic scale
+
+Two distinct issues in Stage 2.6 (a `Probe` budget too small once
+belief was fully populated across a real 16-position board, and a
+genuine engine-level memory-corruption bug in `deep_copy_term` during
+buffer compaction — see Part 4) both had one thing in common: **every
+relevant piece of logic had already passed its own isolated test with
+small, hand-built inputs**, and both bugs only appeared once the same
+logic ran against realistically-sized data inside the full integrated
+program.
+
+This does not mean isolated testing (Part 2's own general discipline,
+used successfully throughout Stages 2.0-2.5) was wrong — it caught
+many real bugs early and cheaply. It means isolated testing at small
+scale is necessary but not sufficient. Two concrete takeaways:
+
+- **`Probe` budgets and similar fixed constants** chosen against small
+  test inputs may need to be re-checked (or set generously, or made
+  configurable) once the same logic is exercised against realistic
+  data sizes. A budget of `100` was plenty for a 5-6-position isolated
+  test and silently insufficient for a real 16-position board.
+- **Some bugs (particularly memory-safety issues in the engine itself)
+  may only manifest under specific timing/size conditions** — e.g., a
+  compaction bug that depends on the exact byte-size relationship
+  between a removed entry and the entry being compacted into its gap.
+  No amount of small-scale isolated testing would have caught this;
+  it required running the full, realistically-sized integration and
+  then tracing the actual failure with byte-level precision once it
+  appeared.
+
+**Practical implication**: after isolated tests pass, still budget
+time for at least one full end-to-end run at realistic scale before
+considering a stage done — and if that full run fails even though
+every isolated piece passed, do not assume the isolated tests must
+therefore be wrong; the bug may be a scale-dependent one that isolated
+testing structurally cannot catch.
+
 ## Part 3: Working with `Probe`
 
 `(probe Goal Condition Budget Sandbox ReqGround)`:
@@ -369,6 +407,40 @@ re-discovering:
   Fixed by handling `POLLNVAL` explicitly. Also fixed a missing
   `fflush(stdout)` that could lose buffered output if the process was
   still running (or crashed) before an implicit flush occurred.
+- **`deep_copy_term` compaction corruption (Stage 2.6)**: a genuine
+  memory-safety bug in the core engine, not in any `.rap` code. When
+  `Agenda::remove` compacts the queue buffer (sliding a later, larger
+  entry into the gap left by a removed one), `deep_copy_term` copied a
+  pair's `car` recursively, then only afterward read and copied its
+  `cdr` — `p->cdr = deep_copy_term(dest, t.pair->cdr)` reads
+  `t.pair->cdr` from source memory *after* the `car` recursion has
+  already returned. If the destination writes from copying `car`
+  happened to land on the same physical bytes as the *source* node's
+  still-unread `cdr` field (which can happen when a compaction's
+  source and destination ranges overlap), the `cdr` read back a
+  corrupted value — observed as a `Nil` field silently becoming a
+  stray `Var(2)`. This surfaced as some, but not all, of a batch of
+  newly-added agenda entries mysteriously failing (arity/destructure
+  mismatches against corrupted data) with no error and no crash,
+  several steps removed from the actual write that caused it — one of
+  the hardest bugs found in this project, requiring byte-level address
+  tracing to pin down. Fixed by saving both `car` and `cdr` as local
+  copies *before* either recursive `deep_copy_term` call, so neither
+  can be corrupted by the other's writes. See Part 2, item 8 for how
+  this was found and what it implies about testing at larger scale.
+- **`Probe` budget too small at larger scale (Stage 2.6)**: a `Probe`
+  budget of `100` (used inside `find-new-matches-collecto`, wrapping
+  `has-new-pairo`) was sufficient for the small hand-built belief
+  states used in isolated testing, but silently insufficient once
+  belief was fully populated across a real 16-position board — the
+  search needed closer to ~104-122 steps to exhaust a longer list,
+  causing `Probe` to return `bounded` (an indeterminate outcome, not a
+  clean `true`/`false`) rather than the expected answer, which made
+  `find-new-matches-collecto` fail to find real matches with no error
+  at all. Fixed by raising the budget to `300`. See Part 2, item 8 —
+  this is the same underlying lesson as the `deep_copy_term` bug:
+  isolated tests with small inputs can pass cleanly while a bug (or,
+  here, an insufficient constant) only manifests at realistic scale.
 - **Abandoned: parameterized `noto`/negation-as-failure stdlib
   proposal**: based on the (incorrect, at the time) assumption that
   `probe` could take a variable holding a goal. Infeasible as designed
