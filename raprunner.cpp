@@ -72,6 +72,7 @@ static void apply_changeset(const ChangeSet& cs,
                 Term stable = deep_copy_term(intern_arena, op.output_term);
                 print_term(stable);
                 std::printf("\n");
+                std::fflush(stdout);
                 break;
             }
         }
@@ -139,6 +140,7 @@ static void run_one(RapEvaluator& evaluator,
         }
     }
 
+    evaluator.sync_changeset_op_count();
     ChangeSet* cs = evaluator.get_changeset();
     if (verbose) {
         std::fprintf(stderr, "[run_one] done id=%u cs_ops=%u\n",
@@ -548,10 +550,9 @@ int main(int argc, char** argv) {
         } else {
             // Agenda empty. Reset wrap_arena — all wrappers have executed.
             wrap_arena.reset();
-
-		// Exit if no fds remain.
-		if (watched_fds.empty()) break;
-	};
+            // Exit if no fds remain.
+            if (watched_fds.empty()) break;
+        }
 
         // Poll watched fds for input.
         std::vector<struct pollfd> pfds;
@@ -593,8 +594,12 @@ int main(int argc, char** argv) {
                                         handle_input_rel, fd, input_term);
                 }
                 // n < 0: read error — ignore for now (poll will report POLLERR next)
-            } else if (revents & (POLLHUP | POLLERR)) {
-                // No data available but fd hung up or errored — remove it.
+            } else if (revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                // Hung up, errored, or invalid fd (macOS returns POLLNVAL for
+                // /dev/null and other non-pollable fds). Treat as EOF.
+                enqueue_handle_input(wrap_arena, agenda, spine, rel_env,
+                                    intern_arena, intern,
+                                    handle_input_rel, fd, Term::nil());
                 fds_to_remove.push_back(fd);
             }
         }

@@ -92,22 +92,17 @@
 ; than letting it run on its own is what lets this test distinguish
 ; "add really works" from "the loop happened to advance somehow."
 ;
-; When run: flips position 2 against the fixed board, removes
-; itself, adds a new belief-entryo entry holding the flipped belief,
-; and outputs the flipped belief so its execution is directly
-; observable. Position 2 and the board are hardcoded here for this
-; stage's test -- real position selection is Stage 2.5's job.
+; When run: flips position 2 against the fixed board and outputs the
+; flipped belief so its execution is directly observable. No re-add:
+; this is a single-flip test and the entry was already consumed by
+; dequeue, so there is nothing to "remove self" from the agenda.
+; Position 2 and the board are hardcoded here for this stage's test.
 (defrel (belief-entryo agenda args ops)
-  (fresh (board new-belief ops0 ops1 self-belief self-id)
+  (fresh (board new-belief ops0)
     (conj
       (== board ((0 . a) (1 . b) (2 . c) (3 . d)))
       (reveal-ato args 2 board new-belief)
-      (cons-ops (output (belief-entryo-ran new-belief)) (no-ops) ops0)
-      (find-beliefo agenda self-belief self-id)
-      (cons-ops (remove self-id) ops0 ops1)
-      (cons-ops
-        (add (rel (a r) (call belief-entryo a r)) new-belief)
-        ops1 ops))))
+      (cons-ops (output (belief-entryo-ran new-belief)) (no-ops) ops))))
 
 ; kickoffo: Entry A. Runs once, finds Entry B (the belief-entryo
 ; instance seeded by main) and removes it WITHOUT ever letting it
@@ -128,33 +123,23 @@
       (cons-ops (output (kickoffo-ran old-id)) (no-ops) ops0)
       (cons-ops (remove old-id) ops0 ops1)
       (cons-ops
-        (add (rel (a r) (call belief-entryo a r)) fresh-belief)
+        (add (rel (a b r) (call belief-entryo a b r)) fresh-belief)
         ops1 ops))))
 
 ; main: seed the agenda with BOTH Entry A (kickoffo) and Entry B
 ; (belief-entryo, holding an initial all-unknown belief), in a
-; single ChangeSet, via two chained add ops -- plus, per direct
-; feedback, an explicit output of main's own so main's execution is
-; directly confirmed too, not just inferred from downstream output
-; (or its absence). Entry B is added first here purely so its id (0)
-; is easy to reason about by hand; add order does not otherwise
-; matter since both entries are genuinely independent, runnable
-; agenda entries from the moment this ChangeSet is applied -- neither
-; is a placeholder, per the standing rule that every agenda entry
-; must be runnable by construction.
+; single ChangeSet, via two chained add ops -- plus an explicit
+; output of main's own so main's execution is directly confirmed.
 ;
-; NOTE on `call`: earlier drafts wrote (call cons-ops ...) everywhere,
-; following wc.rap's own usage literally. Per direct feedback, this is
-; unnecessary -- cons-ops, like every other relation in this project
-; (belief-ato, reveal-ato, etc.), can be referred to directly without
-; the call wrapper. wc.rap's own (call cons-ops ...) usage is not
-; wrong, just more verbose than needed; dropped here throughout for
-; consistency with how every other relation call in this file already
-; looks. `call` is still required specifically for invoking an
-; anonymous `rel` TERM value (e.g. `(call belief-entryo a r)` inside
-; an added rel closure) -- that is a different situation, calling a
-; first-class relation value rather than a named relation directly in
-; source.
+; ORDERING: kickoffo is added FIRST so it gets the lower ID and is
+; dequeued first (FIFO). belief-entryo is added second. This order
+; is required: kickoffo must run before belief-entryo so it can find
+; and remove Entry B before Entry B gets a chance to run.
+;
+; WRAPPERS: 3-param `(rel (a b r) ...)` is required for kickoffo and
+; belief-entryo because they are 3-param relations (agenda args ops).
+; run_one passes call_args = [agenda, entry.args, Var(1)] for 3-param
+; entries, so the wrapper must declare all three to receive them.
 ;
 ; Expected output, across however many reactive-loop steps it takes
 ; to run main, then kickoffo, then the belief-entryo it adds:
@@ -173,10 +158,10 @@
       (all-unknowno 4 initial-belief)
       (cons-ops (output (main-ran yes)) (no-ops) ops0)
       (cons-ops
-        (add (rel (a r) (call belief-entryo a r)) initial-belief)
+        (add (rel (a b r) (call kickoffo a b r)) ())
         ops0 ops1)
       (cons-ops
-        (add (rel (a r) (call kickoffo a r)) ())
+        (add (rel (a b r) (call belief-entryo a b r)) initial-belief)
         ops1 ops))))
 
 (defrel (handle_input agenda fd input ops)
