@@ -93,6 +93,12 @@ static void run_one(RapEvaluator& evaluator,
     QueryEntry entry;
     if (!agenda.dequeue(entry)) return;
 
+    if (verbose) {
+        std::fprintf(stderr, "[run_one] start id=%u nparams=%u\n",
+                     entry.id, entry.query_term.rel ? entry.query_term.rel->param_count : 0);
+        std::fflush(stderr);
+    }
+
     // Build agenda list term from remaining entries.
     spine.reset();
     Term agenda_term = agenda.as_term(spine.get());
@@ -134,6 +140,11 @@ static void run_one(RapEvaluator& evaluator,
     }
 
     ChangeSet* cs = evaluator.get_changeset();
+    if (verbose) {
+        std::fprintf(stderr, "[run_one] done id=%u cs_ops=%u\n",
+                     entry.id, cs ? cs->op_count : 999);
+        std::fflush(stderr);
+    }
     if (cs) apply_changeset(*cs, agenda, intern_arena);
 
     if (verbose) {
@@ -248,13 +259,13 @@ static Term build_char_list(Arena& pair_arena, Arena& sym_arena, Intern& intern,
 // ============================================================================
 // enqueue_handle_input: build and enqueue a handle_input wrapper query
 //
-// The wrapper is a 2-param RelNode following the standard arity-2 convention:
-//   (rel (agenda ops) (call handle_input agenda-snapshot fd-term input-term ops))
+// The wrapper is a 2-param RelNode: (rel (agenda ops) body).
+// run_one calls it as: call_args[0]=agenda_term, call_args[1]=Var(1).
 //
-// Agenda snapshot and fd/input are captured as literal terms at enqueue time.
-// The ops output variable (BVar(1)) is wired through the standard convention:
-// run_one passes Var(1) as call_args[1], which the wrapper's body receives as
-// BVar(1) and forwards to handle_input as its last argument.
+// BVar resolution in a 2-param wrapper uses DeBruijn indexing from the
+// innermost (last) param outward:
+//   BVar(0) → depth 0 → last param → Var(base+1) → call_args[1] = Var(1) (ops)
+//   BVar(1) → depth 1 → first param → Var(base+0) → call_args[0] = agenda_term
 // ============================================================================
 static void enqueue_handle_input(Arena&      wrap_arena,
                                  Agenda&     agenda,
@@ -265,10 +276,6 @@ static void enqueue_handle_input(Arena&      wrap_arena,
                                  Term        handle_input_rel,
                                  int         fd,
                                  Term        input_term) {
-    // Build agenda snapshot in spine_arena.
-    spine.reset();
-    Term agenda_snap = agenda.as_term(spine.get());
-
     // Allocate the args array for the inner call in wrap_arena.
     Term* inner_args = static_cast<Term*>(
         wrap_arena.alloc(4 * sizeof(Term), alignof(Term)));
@@ -276,11 +283,13 @@ static void enqueue_handle_input(Arena&      wrap_arena,
         std::fprintf(stderr, "raprunner: OOM building handle_input args\n");
         return;
     }
-    inner_args[0] = agenda_snap;        // agenda snapshot (captured literal)
+    // BVar(1) is the agenda (first/outermost param); BVar(0) is ops (last param).
+    // Using BVar(1) for agenda (not a captured literal) ensures handle_input sees
+    // the live agenda at dequeue time, not a stale snapshot from enqueue time.
+    inner_args[0] = Term::bvar(1);      // agenda: BVar(1) → first param → agenda_term
     inner_args[1] = Term::integer(fd);  // fd identifier (captured literal)
     inner_args[2] = input_term;         // char-list or nil / EOF (captured literal)
-    inner_args[3] = Term::bvar(1);      // ops = BVar(1): the wrapper's 2nd param,
-                                        //   which run_one binds to Var(1)
+    inner_args[3] = Term::bvar(0);      // ops: BVar(0) → last param → Var(1)
 
     // Build the inner call goal: (call handle_input agenda-snap fd input BVar(1))
     Goal* body = wrap_arena.make<Goal>();
@@ -294,7 +303,8 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     // Build the 2-param wrapper RelNode: (rel (agenda ops) body).
     // param_count=2 satisfies enqueue's {2,3} check.
     // Enqueued with nil args; run_one passes [agenda_term, Var(1)] per the
-    // arity-2 calling convention, making BVar(1) resolve to Var(1) (ops).
+    // arity-2 calling convention, making BVar(0) resolve to Var(1) (ops) and
+    // BVar(1) resolve to agenda_term.
     RelNode* wrapper = wrap_arena.make<RelNode>();
     if (!wrapper) {
         std::fprintf(stderr, "raprunner: OOM building wrapper RelNode\n");
@@ -311,6 +321,7 @@ static void enqueue_handle_input(Arena&      wrap_arena,
     (void)rel_env;
     (void)intern_arena;
     (void)sess_intern;
+    (void)spine;
 }
 
 

@@ -1,5 +1,24 @@
 ; examples/wc.rap — character, word, and line counter
-; Run: ./raprunner examples/wc.rap
+; Run: echo "some text" | ./raprunner examples/wc.rap
+;
+; Design: wc-counter is the authoritative state carrier and the only entity
+; that counts characters.  handle_input delivers raw bytes; wc-counter counts
+; them when dequeued.
+;
+; wc-counter (arity 3: agenda args ops)
+;   args = (chars words lines in-word input)
+;   idle  (input = ()): re-adds self with same counts to persist state between
+;         handle_input arrivals.  The 1 ms poll between run_one calls caps the
+;         idle spin rate at ~1000 iterations/sec — not a busy-loop.
+;   active (input ≠ ()): counts the pending input, re-adds as idle.
+;
+; handle_input (arity 4: agenda fd input ops)
+;   data: finds the current wc-counter, removes it, adds a fresh wc-counter
+;         with the new data as its input payload.  wc-counter will count on
+;         the next dequeue.
+;   EOF:  finds the current wc-counter, flushes any pending input (handles the
+;         rare race where an active wc-counter is still in the queue when EOF
+;         arrives), outputs final counts, removes the entry.
 
 (defrel (count-charo c chars words lines in-word chars1 words1 lines1 in-word1)
   (addo chars 1 chars1)
@@ -42,46 +61,43 @@
         (conj
           (== input ())
           (call cons-ops
-            (add (rel (a r) (call wc-counter a r)) (chars words lines in-word ()))
+            (add (rel (a b r) (call wc-counter a b r)) (chars words lines in-word ()))
             (no-ops) ops))
         (fresh (c2 w2 l2 iw2)
           (conj
             (=/= input ())
             (count-charo-listo input chars words lines in-word c2 w2 l2 iw2)
             (call cons-ops
-              (add (rel (a r) (call wc-counter a r)) (c2 w2 l2 iw2 ()))
+              (add (rel (a b r) (call wc-counter a b r)) (c2 w2 l2 iw2 ()))
               (no-ops) ops)))))))
 
 (defrel (main args ops)
   (call cons-ops
-    (add (rel (a r) (call wc-counter a r)) (0 0 0 0 ()))
+    (add (rel (a b r) (call wc-counter a b r)) (0 0 0 0 ()))
     (no-ops) ops))
 
 (defrel (handle_input agenda fd input ops)
   (disj
-    (fresh (id chars words lines iw old-input ops0)
+    ; EOF: flush any pending input in old-input before reporting counts.
+    ; Normally old-input = () (wc-counter is idle), but if EOF arrives while
+    ; wc-counter is still active in the queue, this count ensures correctness.
+    (fresh (id chars words lines iw old-input ops0 c2 w2 l2 iw2)
       (conj
         (== input ())
         (find-by-contento agenda (chars words lines iw old-input) id)
+        (count-charo-listo old-input chars words lines iw c2 w2 l2 iw2)
         (call cons-ops (remove id) (no-ops) ops0)
         (call cons-ops
-          (output (counted num-chars chars num-words words num-lines lines))
+          (output (counted num-chars c2 num-words w2 num-lines l2))
           ops0 ops)))
-    ; Data branch: do the counting HERE, directly, against old-input
-    ; merged with whatever's freshly arrived — actually, old-input
-    ; should always be () at this point (wc-counter clears it every
-    ; time it would run, but since wc-counter never runs, old-input
-    ; here is whatever was last stuffed in and never processed). For
-    ; this step, just count the NEWLY arrived `input` against the
-    ; current chars/words/lines/iw directly — ignore old-input/carry
-    ; entirely for now, since nothing has ever consumed it.
-    (fresh (id chars words lines iw old-input ops0 c2 w2 l2 iw2)
+    ; Data: remove the current wc-counter, add a fresh one carrying the new
+    ; input.  wc-counter will count it when dequeued.  chars/words/lines/iw
+    ; come from the current entry and represent the accumulated counts so far.
+    (fresh (id chars words lines iw old-input ops0)
       (conj
         (=/= input ())
         (find-by-contento agenda (chars words lines iw old-input) id)
-        (count-charo-listo input chars words lines iw c2 w2 l2 iw2)
         (call cons-ops (remove id) (no-ops) ops0)
         (call cons-ops
-          (add (rel (a r) (call wc-counter a r)) (c2 w2 l2 iw2 ()))
+          (add (rel (a b r) (call wc-counter a b r)) (chars words lines iw input))
           ops0 ops)))))
-
