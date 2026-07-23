@@ -53,6 +53,41 @@ alignas(64) static std::uint8_t wrap_buf[64 * 1024];
 
 
 // ============================================================================
+// Recursive Var scanner: prints any Var nodes found in a term tree.
+// Returns true if any Var was found.
+// ============================================================================
+static bool scan_term_vars(Term t, std::uint32_t entry_id,
+                           const char* ctx, bool printed_header) {
+    switch (t.tag) {
+        case TermTag::Var:
+            if (!printed_header) {
+                std::fprintf(stderr, "[VARFOUND] entry=%u ctx=%s\n", entry_id, ctx);
+                printed_header = true;
+            }
+            std::fprintf(stderr, "  Var(%u)\n", t.id);
+            return true;
+        case TermTag::Pair:
+            if (t.pair) {
+                bool a = scan_term_vars(t.pair->car, entry_id, ctx, printed_header);
+                bool b = scan_term_vars(t.pair->cdr, entry_id, ctx, printed_header || a);
+                return a || b;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+static void scan_agenda_vars(const Agenda& agenda, const char* ctx) {
+    std::uint32_t pos = agenda.tail;
+    for (std::uint32_t i = 0; i < agenda.count; ++i) {
+        const QueryEntry* e = reinterpret_cast<const QueryEntry*>(agenda.buf + pos);
+        scan_term_vars(e->args, e->id, ctx, false);
+        pos += e->byte_size;
+    }
+}
+
+// ============================================================================
 // apply_changeset: apply the ops from a ChangeSet to the agenda / stdout
 // ============================================================================
 static void apply_changeset(const ChangeSet& cs,
@@ -61,12 +96,22 @@ static void apply_changeset(const ChangeSet& cs,
     for (std::uint32_t i = 0; i < cs.op_count; ++i) {
         const Op& op = cs.ops[i];
         switch (op.tag) {
-            case OpTag::Add:
-                agenda.enqueue(op.add.rel_term, op.add.args);
+            case OpTag::Add: {
+                std::uint32_t new_id = agenda.enqueue(op.add.rel_term, op.add.args);
+                std::uint32_t nparams = (op.add.rel_term.tag == TermTag::Rel && op.add.rel_term.rel)
+                    ? op.add.rel_term.rel->param_count : 0;
+                std::fprintf(stderr, "[apply] added id=%u nparams=%u\n", new_id, nparams);
+                scan_agenda_vars(agenda, "after-add");
+                std::fflush(stderr);
                 break;
-            case OpTag::Remove:
+            }
+            case OpTag::Remove: {
+                std::fprintf(stderr, "[apply] remove qid=%u\n", op.query_id);
                 agenda.remove(op.query_id);
+                scan_agenda_vars(agenda, "after-remove");
+                std::fflush(stderr);
                 break;
+            }
             case OpTag::Output: {
                 // Deep-copy into intern_arena so the term survives eval_arena reset.
                 Term stable = deep_copy_term(intern_arena, op.output_term);
@@ -91,6 +136,22 @@ static void run_one(RapEvaluator& evaluator,
                     Arena&        eval_arena,
                     Arena&        intern_arena,
                     bool          verbose = false) {
+    // Print queue state before dequeue (include byte_size and args for 3-param entries).
+    {
+        std::uint32_t pos = agenda.tail;
+        std::fprintf(stderr, "[queue] count=%u tail=%u head=%u\n",
+                     agenda.count, agenda.tail, agenda.head);
+        for (std::uint32_t i = 0; i < agenda.count; ++i) {
+            const QueryEntry* e = reinterpret_cast<const QueryEntry*>(agenda.buf + pos);
+            std::uint32_t np = (e->query_term.tag == TermTag::Rel && e->query_term.rel)
+                               ? e->query_term.rel->param_count : 0;
+            std::fprintf(stderr, "  id=%u np=%u bsz=%u pos=%u\n",
+                         e->id, np, e->byte_size, pos);
+            pos += e->byte_size;
+        }
+        std::fflush(stderr);
+    }
+
     QueryEntry entry;
     if (!agenda.dequeue(entry)) return;
 
@@ -136,6 +197,17 @@ static void run_one(RapEvaluator& evaluator,
                     std::fprintf(stderr,
                         "WARNING: query execution ran out of memory (eval_arena);"
                         " results may be incomplete or wrong.\n");
+
+                evaluator.sync_changeset_op_count();
+                ChangeSet* cs2 = evaluator.get_changeset();
+                std::uint32_t ops_count = cs2 ? cs2->op_count : 0;
+                if (ops_count == 0 && nparams == 3) {
+                    std::fprintf(stderr, "[fail] id=%u oom=%d args=",
+                                 entry.id, oom ? 1 : 0);
+                    print_term(entry.args);
+                    std::fprintf(stderr, "\n");
+                    std::fflush(stderr);
+                }
             }
         }
     }

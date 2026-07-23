@@ -123,7 +123,7 @@
               (disj
                 (conj
                   (probe (has-new-pairo status1 pos1 rest matched-pairs)
-                         true 100 true false)
+                         true 300 true false)
                   (belief-ato rest pos2 status1)
                   (=/= pos1 pos2)
                   (notin-pairso matched-pairs pos1 pos2)
@@ -131,7 +131,7 @@
                   (== pairs ((pos1 . pos2) . tail)))
                 (conj
                   (probe (has-new-pairo status1 pos1 rest matched-pairs)
-                         false 100 true false)
+                         false 300 true false)
                   (find-new-matches-collecto rest matched-pairs pairs))))))))))
 
 ;; --- copied byte-for-byte, verified, from test_shuffle.rap /
@@ -288,11 +288,12 @@
 ; behind the new attempts) or does nothing further.
 (defrel (enqueue-flip-known-matcheso agenda args ops)
   (fresh (belief status-id board matched counter new-pairs
-          attempt-ops ops0 ops1 ops2)
+          attempt-ops ops0 ops1 ops2 dbg0)
     (conj
       (== args (belief-state belief))
       (find-taggedo agenda (output-status board matched counter) status-id)
       (find-new-matches-collecto belief matched new-pairs)
+      (cons-ops (output (dbg-new-pairs belief matched new-pairs)) (no-ops) dbg0)
       (disj
         (conj
           (== new-pairs ())
