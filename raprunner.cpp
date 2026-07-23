@@ -54,22 +54,27 @@ alignas(64) static std::uint8_t wrap_buf[64 * 1024];
 
 // ============================================================================
 // Recursive Var scanner: prints any Var nodes found in a term tree.
+// depth: bitmask encoding path (bit k = cdr at level k; else car).
 // Returns true if any Var was found.
 // ============================================================================
 static bool scan_term_vars(Term t, std::uint32_t entry_id,
-                           const char* ctx, bool printed_header) {
+                           const char* ctx, bool printed_header,
+                           int depth, std::uint64_t path) {
     switch (t.tag) {
         case TermTag::Var:
             if (!printed_header) {
                 std::fprintf(stderr, "[VARFOUND] entry=%u ctx=%s\n", entry_id, ctx);
                 printed_header = true;
             }
-            std::fprintf(stderr, "  Var(%u)\n", t.id);
+            std::fprintf(stderr, "  Var(%u) at depth=%d path=0x%llx addr=%p\n",
+                         t.id, depth, (unsigned long long)path, (void*)&t);
             return true;
         case TermTag::Pair:
             if (t.pair) {
-                bool a = scan_term_vars(t.pair->car, entry_id, ctx, printed_header);
-                bool b = scan_term_vars(t.pair->cdr, entry_id, ctx, printed_header || a);
+                bool a = scan_term_vars(t.pair->car, entry_id, ctx, printed_header,
+                                        depth+1, path << 1);
+                bool b = scan_term_vars(t.pair->cdr, entry_id, ctx, printed_header || a,
+                                        depth+1, (path << 1) | 1);
                 return a || b;
             }
             return false;
@@ -82,7 +87,7 @@ static void scan_agenda_vars(const Agenda& agenda, const char* ctx) {
     std::uint32_t pos = agenda.tail;
     for (std::uint32_t i = 0; i < agenda.count; ++i) {
         const QueryEntry* e = reinterpret_cast<const QueryEntry*>(agenda.buf + pos);
-        scan_term_vars(e->args, e->id, ctx, false);
+        scan_term_vars(e->args, e->id, ctx, false, 0, 0);
         pos += e->byte_size;
     }
 }

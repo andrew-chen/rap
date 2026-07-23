@@ -142,9 +142,60 @@ struct Agenda {
                                            - static_cast<std::uint32_t>(sizeof(QueryEntry));
                     Arena sub(dst_base + sizeof(QueryEntry), dst_avail);
 
+                    // Diagnostic: check overlap between dst sub-arena and src data.
+                    {
+                        std::uint8_t* src_data_start = buf + read_pos + sizeof(QueryEntry);
+                        std::uint8_t* dst_data_start = dst_base + sizeof(QueryEntry);
+                        std::uint8_t* dst_data_end   = dst_data_start + src_byte_size
+                                                      - sizeof(QueryEntry);
+                        if (dst_data_end > src_data_start) {
+                            std::fprintf(stderr,
+                                "[remove-OVERLAP] id=%u removed=%u: "
+                                "dst=[%u,%u) src=[%u,%u) overlap=%u gap=%u srcbsz=%u\n",
+                                src_id, id,
+                                (unsigned)(dst_data_start - buf),
+                                (unsigned)(dst_data_end - buf),
+                                (unsigned)(src_data_start - buf),
+                                (unsigned)(src_data_start + src_byte_size - sizeof(QueryEntry) - buf),
+                                (unsigned)(dst_data_end - src_data_start),
+                                (unsigned)(src_data_start - dst_data_start),
+                                src_byte_size);
+                            std::fflush(stderr);
+                        }
+                    }
+
+                    // Scan src_args for Var BEFORE copy.
+                    {
+                        Term t = src_args;
+                        // Quick check: walk pairs looking for Var
+                        // (inline to avoid dependency on raprunner.cpp helpers)
+                        std::function<bool(Term)> has_var = [&](Term u) -> bool {
+                            if (u.tag == TermTag::Var) return true;
+                            if (u.tag == TermTag::Pair && u.pair)
+                                return has_var(u.pair->car) || has_var(u.pair->cdr);
+                            return false;
+                        };
+                        if (has_var(t))
+                            std::fprintf(stderr,
+                                "[remove-PRE-VAR] id=%u has Var in args\n", src_id);
+                    }
+
                     // Copy both terms together into the destination sub-arena.
                     Term copied_rel  = deep_copy_term(sub, src_query);
                     Term copied_args = deep_copy_term(sub, src_args);
+
+                    // Scan copied_args for Var AFTER copy.
+                    {
+                        std::function<bool(Term)> has_var = [&](Term u) -> bool {
+                            if (u.tag == TermTag::Var) return true;
+                            if (u.tag == TermTag::Pair && u.pair)
+                                return has_var(u.pair->car) || has_var(u.pair->cdr);
+                            return false;
+                        };
+                        if (has_var(copied_args))
+                            std::fprintf(stderr,
+                                "[remove-POST-VAR] id=%u has Var in copied args\n", src_id);
+                    }
 
                     std::uint32_t term_bytes = static_cast<std::uint32_t>(sub.cur - sub.base);
                     std::uint32_t new_size   = static_cast<std::uint32_t>(sizeof(QueryEntry))
