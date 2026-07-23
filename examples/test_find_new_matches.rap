@@ -1,0 +1,109 @@
+; test_find_new_matches.rap — isolated test of the belief-scanning
+; logic from memory_stage2_5.rap, before wiring it into the full
+; agenda-based program.
+;
+; Scope: verify notin-pairso and find-new-matches-collecto alone,
+; against hand-built belief and matched-pairs inputs, with no agenda,
+; no attempto, no output-status involved at all -- same isolation
+; discipline as memory_stage2_0.rap / memory_stage2_1.rap, applied
+; here because this is the most structurally complex logic in Stage
+; 2.5 and deserves to be checked on its own before integration.
+;
+; Dependencies: copies in belief-ato from memory_stage2_0.rap
+; (needed by find-new-matches-collecto).
+;
+; Run with: ./raprunner test_find_new_matches.rap < /dev/null
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+;; --- copied verbatim (as fixed) from memory_stage2_5.rap ---
+
+(defrel (notin-pairso matched-pairs pos1 pos2)
+  (disj
+    (== matched-pairs ())
+    (fresh (mp1 mp2 rest)
+      (conj
+        (== matched-pairs ((mp1 . mp2) . rest))
+        (=/= mp1 pos1)
+        (=/= mp2 pos2)
+        (=/= mp1 pos2)
+        (=/= mp2 pos1)
+        (notin-pairso rest pos1 pos2)))))
+
+(defrel (find-new-matches-collecto belief matched-pairs pairs)
+  (disj
+    (conj (== belief ()) (== pairs ()))
+    (fresh (pos1 status1 rest pos2 tail)
+      (conj
+        (== belief ((pos1 . status1) . rest))
+        (disj
+          (conj
+            (== status1 unknown)
+            (find-new-matches-collecto rest matched-pairs pairs))
+          (fresh (dummy2)
+            (conj
+              (=/= status1 unknown)
+              (disj
+                (conj
+                  (belief-ato rest pos2 status1)
+                  (=/= pos1 pos2)
+                  (notin-pairso matched-pairs pos1 pos2)
+                  (find-new-matches-collecto rest matched-pairs tail)
+                  (== pairs ((pos1 . pos2) . tail)))
+                (find-new-matches-collecto rest matched-pairs pairs)))))))))
+
+;; --- test cases ---
+
+; main runs four independent test cases and outputs each result,
+; hand-checkable against the expected values in each comment below.
+;
+; TEST 1 -- notin-pairso, direct: matched-pairs contains (2 . 3).
+; Checking (2 . 3) itself should FAIL (it IS in the list). Checking
+; (2 . 3) reversed as (3 . 2) should also FAIL (order-independence).
+; Checking an unrelated pair (5 . 6) should SUCCEED.
+;
+; An earlier draft of this test tried to express "only output if
+; notin-pairso succeeds" via (disj (conj notin-pairso ...) (== ops1
+; ops0)) -- this is WRONG, caught before running it: the second
+; branch's condition does not actually depend on the first branch
+; failing, so both branches are available regardless of notin-pairso's
+; real outcome, and which one a single-answer query returns depends on
+; search order, not correctness. This is the exact same mistake
+; already caught once in memory_stage2_2.rap's first report-matcho
+; draft. The correct fix, reused from that file: use Probe to convert
+; success/failure into an explicit, genuinely exclusive outcome symbol
+; first, then branch on THAT symbol.
+;
+; Expected output:
+;   (test1-unrelated-pair result yes)
+;   (test1-exact-pair result no)
+;   (test1-reversed-pair result no)
+(defrel (check-notin-reporto matched-pairs pos1 pos2 result)
+  (disj
+    (conj
+      (probe (notin-pairso matched-pairs pos1 pos2) true 100 true false)
+      (== result yes))
+    (conj
+      (probe (notin-pairso matched-pairs pos1 pos2) false 100 true false)
+      (== result no))))
+
+(defrel (main args ops)
+  (fresh (matched1 r1 r2 r3 ops0 ops1 ops2)
+    (conj
+      (== matched1 ((2 . 3) (10 . 11)))
+      (check-notin-reporto matched1 5 6 r1)
+      (check-notin-reporto matched1 2 3 r2)
+      (check-notin-reporto matched1 3 2 r3)
+      (cons-ops (output (test1-unrelated-pair result r1)) (no-ops) ops0)
+      (cons-ops (output (test1-exact-pair result r2)) ops0 ops1)
+      (cons-ops (output (test1-reversed-pair result r3)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

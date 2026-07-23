@@ -1,0 +1,141 @@
+; test_find_new_matches_collecto.rap — isolated test of
+; find-new-matches-collecto, the belief-scanning relation from
+; memory_stage2_5.rap.
+;
+; Scope: verify find-new-matches-collecto alone, against hand-built
+; belief and matched-pairs inputs, no agenda, no attempto, no
+; output-status involved. Depends on notin-pairso, already separately
+; verified correct in test_find_new_matches.rap -- that file is kept
+; as its own permanent regression test and is not modified or
+; extended here, so it remains available to rerun on its own if
+; anything upstream of notin-pairso ever changes.
+;
+; Dependencies: copies in belief-ato (memory_stage2_0.rap) and
+; notin-pairso (memory_stage2_5.rap, already confirmed correct via
+; test_find_new_matches.rap), verbatim.
+;
+; Run with: ./raprunner test_find_new_matches_collecto.rap < /dev/null
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+;; --- copied verbatim (confirmed correct) from memory_stage2_5.rap ---
+
+(defrel (notin-pairso matched-pairs pos1 pos2)
+  (disj
+    (== matched-pairs ())
+    (fresh (mp1 mp2 rest)
+      (conj
+        (== matched-pairs ((mp1 . mp2) . rest))
+        (=/= mp1 pos1)
+        (=/= mp2 pos2)
+        (=/= mp1 pos2)
+        (=/= mp2 pos1)
+        (notin-pairso rest pos1 pos2)))))
+
+; has-new-pairo: succeeds iff pos1 (whose value is status1) has a
+; valid, not-already-excluded partner position somewhere in rest.
+; Factored out as its own named relation specifically so it can be
+; wrapped in a single, literal Probe call (Probe requires a syntactic
+; goal form at the call site, not a raw variable -- confirmed earlier
+; in this project) to test true/false WITHOUT duplicating this
+; conjunction's text at two call sites.
+(defrel (has-new-pairo status1 pos1 rest matched-pairs)
+  (fresh (pos2)
+    (conj
+      (belief-ato rest pos2 status1)
+      (=/= pos1 pos2)
+      (notin-pairso matched-pairs pos1 pos2))))
+
+; find-new-matches-collecto: an earlier draft of this relation had a
+; genuine bug, caught only by tracing actual output against hand
+; computation: its two outer disj branches (for the "status1 known"
+; case) were NOT mutually exclusive -- the second branch
+; ("no new pair, just recurse") was unconditionally available
+; regardless of whether the first branch ("found a new pair, add it")
+; also succeeded, so which branch a single-answer query returned
+; depended on search order, not correctness. This is the same bug
+; class already caught twice before in this project (report-matcho in
+; memory_stage2_2.rap; the first draft of this same file's use of
+; notin-pairso). Fixed here by using Probe (via the new has-new-pairo
+; relation above) to determine, up front, whether pos1 genuinely has a
+; new pair or not, and branching cleanly on that explicit true/false
+; result -- the same "convert success/failure into an explicit,
+; genuinely exclusive outcome" pattern already used successfully by
+; check-notin-reporto in test_find_new_matches.rap.
+(defrel (find-new-matches-collecto belief matched-pairs pairs)
+  (disj
+    (conj (== belief ()) (== pairs ()))
+    (fresh (pos1 status1 rest tail)
+      (conj
+        (== belief ((pos1 . status1) . rest))
+        (disj
+          (conj
+            (== status1 unknown)
+            (find-new-matches-collecto rest matched-pairs pairs))
+          (fresh (pos2)
+            (conj
+              (=/= status1 unknown)
+              (disj
+                (conj
+                  (probe (has-new-pairo status1 pos1 rest matched-pairs)
+                         true 100 true false)
+                  (belief-ato rest pos2 status1)
+                  (=/= pos1 pos2)
+                  (notin-pairso matched-pairs pos1 pos2)
+                  (find-new-matches-collecto rest matched-pairs tail)
+                  (== pairs ((pos1 . pos2) . tail)))
+                (conj
+                  (probe (has-new-pairo status1 pos1 rest matched-pairs)
+                         false 100 true false)
+                  (find-new-matches-collecto rest matched-pairs pairs))))))))))
+
+;; --- test cases ---
+
+; TEST A -- no duplicates yet. belief has some revealed values but
+; every revealed value is distinct (no two positions share a value).
+; Expected: pairs = () (nothing to find).
+;
+; TEST B -- exactly one discoverable new pair. belief has positions
+; 0 and 2 both revealed as 'a' (a genuine duplicate), everything else
+; unknown. matched-pairs is empty (nothing excluded).
+; Expected: pairs = ((0 . 2))
+;
+; TEST C -- a real duplicate exists, but it is already excluded via
+; matched-pairs. Same belief as Test B (positions 0 and 2 both 'a'),
+; but matched-pairs already contains (0 . 2).
+; Expected: pairs = () (the real duplicate is correctly excluded,
+; not re-discovered)
+;
+; Expected output:
+;   (testA-no-duplicates pairs ())
+;   (testB-one-new-pair pairs ((0 . 2)))
+;   (testC-already-excluded pairs ())
+(defrel (main args ops)
+  (fresh (beliefA beliefBC resultA resultB resultC
+          ops0 ops1)
+    (conj
+      ; Test A: positions 0, 1, 2 revealed as a, b, c (all distinct);
+      ; position 3 still unknown.
+      (== beliefA ((0 . a) (1 . b) (2 . c) (3 . unknown)))
+      (find-new-matches-collecto beliefA () resultA)
+
+      ; Shared belief for Tests B and C: positions 0 and 2 both 'a'
+      ; (a genuine duplicate), position 1 unknown, position 3 'd'
+      ; (unrelated, distinct value).
+      (== beliefBC ((0 . a) (1 . unknown) (2 . a) (3 . d)))
+      (find-new-matches-collecto beliefBC () resultB)
+      (find-new-matches-collecto beliefBC ((0 . 2)) resultC)
+
+      (cons-ops (output (testA-no-duplicates pairs resultA)) (no-ops) ops0)
+      (cons-ops (output (testB-one-new-pair pairs resultB)) ops0 ops1)
+      (cons-ops (output (testC-already-excluded pairs resultC)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

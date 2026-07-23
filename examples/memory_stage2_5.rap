@@ -1,0 +1,315 @@
+; memory_stage2_5.rap — Stage 2.5: attempt-set maintenance.
+;
+; Scope: given a set of fixed initial "attempts" (each checking a
+; hardcoded pair of positions against ground truth), and a relation
+; that reasons over accumulated belief to discover REAL matching
+; pairs and schedule new attempts for them, drive a full run to
+; completion using only the queue's own structure to know when to
+; stop -- no external step-counting, no explicit "are we done" check
+; anywhere.
+;
+; Three kinds of agenda entries, all genuinely runnable (per the
+; engine's N-ary calling convention):
+;
+;   1. Attempt(pos1, pos2) -- one-shot. Reveals both positions
+;      against ground truth, outputs what it found, updates the one
+;      shared belief entry and output-status, and does NOT re-add
+;      itself, ever, regardless of outcome.
+;
+;   2. enqueue-flip-known-matches -- holds the ONE shared belief
+;      state as its own args. Scans belief for values appearing at
+;      exactly two revealed positions, EXCLUDING any pair already
+;      present in output-status's matched-pairs list, and schedules a
+;      new attempt for each newly-discovered pair. If it schedules
+;      any: re-adds itself AND re-adds output-status, both positioned
+;      after the new attempts in the queue (so output-status cannot
+;      prematurely signal completion ahead of work that is still
+;      pending). If it schedules none: does nothing further and does
+;      NOT re-add itself.
+;
+;   3. output-status -- holds (matched-pairs . counter). Every
+;      attempt's remove+add of this entry bumps counter
+;      unconditionally and appends the resolved pair to matched-pairs
+;      only on a real match. output-status's own body, on the rare
+;      occasion it actually executes, does nothing but report the
+;      final state -- it never re-adds itself under its own power.
+;
+; Board: fixed 4x4 (8 pairs, 16 positions, 0-indexed). Values a-h,
+; each appearing at exactly two positions.
+;
+; Dependencies: copies in valueato (Stage 1), belief-ato, all-unknowno
+; (Stage 2.0), reveal-ato (Stage 2.1), and find-by-contento (already
+; in stdlib/core.rap, not copied). notin-pairso, has-new-pairo, and
+; find-new-matches-collecto below are copied byte-for-byte from
+; test_find_new_matches_collecto.rap, where they were independently
+; verified correct -- pasted exactly rather than retyped, to avoid
+; the copy-paste paren-count errors that occurred earlier in this
+; project when the same logic was retyped by hand.
+;
+; Run with: ./raprunner memory_stage2_5.rap < /dev/null
+
+;; --- copied verbatim from memory_stage1.rap ---
+
+(defrel (valueato board pos val)
+  (fresh (rest p v)
+    (== board ((p . v) . rest))
+    (disj
+      (conj (== p pos) (== v val))
+      (valueato rest pos val))))
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+;; --- copied verbatim from memory_stage2_1.rap ---
+
+(defrel (reveal-ato belief pos board new-belief)
+  (fresh (true-val)
+    (conj
+      (valueato board pos true-val)
+      (reveal-ato-acc belief pos true-val new-belief))))
+
+(defrel (reveal-ato-acc belief pos true-val new-belief)
+  (disj
+    (conj (== belief ()) (== new-belief ()))
+    (fresh (p s rest new-rest)
+      (conj
+        (== belief ((p . s) . rest))
+        (disj
+          (conj
+            (== p pos)
+            (== new-belief ((p . true-val) . new-rest))
+            (== new-rest rest))
+          (conj
+            (=/= p pos)
+            (== new-belief ((p . s) . new-rest))
+            (reveal-ato-acc rest pos true-val new-rest)))))))
+
+;; --- copied byte-for-byte, verified, from
+;;     test_find_new_matches_collecto.rap ---
+
+(defrel (notin-pairso matched-pairs pos1 pos2)
+  (disj
+    (== matched-pairs ())
+    (fresh (mp1 mp2 rest)
+      (conj
+        (== matched-pairs ((mp1 . mp2) . rest))
+        (=/= mp1 pos1)
+        (=/= mp2 pos2)
+        (=/= mp1 pos2)
+        (=/= mp2 pos1)
+        (notin-pairso rest pos1 pos2)))))
+
+(defrel (has-new-pairo status1 pos1 rest matched-pairs)
+  (fresh (pos2)
+    (conj
+      (belief-ato rest pos2 status1)
+      (=/= pos1 pos2)
+      (notin-pairso matched-pairs pos1 pos2))))
+
+(defrel (find-new-matches-collecto belief matched-pairs pairs)
+  (disj
+    (conj (== belief ()) (== pairs ()))
+    (fresh (pos1 status1 rest tail)
+      (conj
+        (== belief ((pos1 . status1) . rest))
+        (disj
+          (conj
+            (== status1 unknown)
+            (find-new-matches-collecto rest matched-pairs pairs))
+          (fresh (pos2)
+            (conj
+              (=/= status1 unknown)
+              (disj
+                (conj
+                  (probe (has-new-pairo status1 pos1 rest matched-pairs)
+                         true 100 true false)
+                  (belief-ato rest pos2 status1)
+                  (=/= pos1 pos2)
+                  (notin-pairso matched-pairs pos1 pos2)
+                  (find-new-matches-collecto rest matched-pairs tail)
+                  (== pairs ((pos1 . pos2) . tail)))
+                (conj
+                  (probe (has-new-pairo status1 pos1 rest matched-pairs)
+                         false 100 true false)
+                  (find-new-matches-collecto rest matched-pairs pairs))))))))))
+
+;; --- new for Stage 2.5 ---
+
+; find-taggedo: general-purpose helper, wraps find-by-contento with a
+; clearer name at each call site for which of the two well-known
+; agenda entries (belief-holder vs. output-status) is being sought.
+(defrel (find-taggedo agenda contents id)
+  (find-by-contento agenda contents id))
+
+; attempto: one-shot. args is the fixed (pos1 . pos2) pair this
+; attempt is responsible for. Reveals both positions, determines
+; match/no-match, reports the result, updates the shared belief entry
+; and output-status accordingly, and never re-adds itself.
+(defrel (attempto agenda args ops)
+  (fresh (pos1 pos2 board
+          belief-id old-belief belief1 new-belief
+          status-id old-matched old-counter new-counter
+          val1 val2 outcome
+          ops0 ops1 ops2 ops3)
+    (conj
+      (== args (pos1 . pos2))
+      (== board ((0 . a) (1 . a) (2 . b) (3 . b)
+                 (4 . c) (5 . c) (6 . d) (7 . d)
+                 (8 . e) (9 . e) (10 . f) (11 . f)
+                 (12 . g) (13 . g) (14 . h) (15 . h)))
+      (find-taggedo agenda old-belief belief-id)
+      (reveal-ato old-belief pos1 board belief1)
+      (reveal-ato belief1 pos2 board new-belief)
+      (belief-ato new-belief pos1 val1)
+      (belief-ato new-belief pos2 val2)
+      (disj
+        (conj (== val1 val2) (== outcome match))
+        (conj (=/= val1 val2) (== outcome no-match)))
+      (cons-ops
+        (output (attempt-result outcome (pos1 val1) (pos2 val2)))
+        (no-ops) ops0)
+      (cons-ops (remove belief-id) ops0 ops1)
+      (cons-ops
+        (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+             new-belief)
+        ops1 ops2)
+      (find-taggedo agenda (old-matched . old-counter) status-id)
+      (addo old-counter 1 new-counter)
+      (cons-ops (remove status-id) ops2 ops3)
+      (disj
+        (conj
+          (== outcome match)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (((pos1 . pos2) . old-matched) . new-counter))
+            ops3 ops))
+        (conj
+          (== outcome no-match)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (old-matched . new-counter))
+            ops3 ops))))))
+
+; pairs->add-attempts-opso: fold a list of newly-discovered pairs into
+; a ChangeSet of add operations, one attempto entry per pair. Mirrors
+; qids->remove-opso's fold shape from the paper's Section 5.2.
+(defrel (pairs->add-attempts-opso pairs ops)
+  (disj
+    (conj (== pairs ()) (no-ops ops))
+    (fresh (pair rest ops-tail)
+      (conj
+        (== pairs (pair . rest))
+        (pairs->add-attempts-opso rest ops-tail)
+        (cons-ops
+          (add (rel (a b r) (call attempto a b r)) pair)
+          ops-tail ops)))))
+
+; enqueue-flip-known-matcheso: args is the shared belief state. Reads
+; output-status (for matched-pairs, to exclude already-resolved
+; pairs) and its own belief, finds any newly-discoverable matching
+; pairs, and either schedules attempts for them (re-adding itself AND
+; output-status, both positioned behind the new attempts) or does
+; nothing further.
+;
+; An earlier draft of this relation was missing the output-status
+; repositioning entirely -- caught during a design-invariant review
+; before ever running this file, not by a runtime failure: it added
+; new attempts and re-added itself, but never touched output-status,
+; meaning output-status (added once, by main, and never repositioned
+; since) could reach the front of the queue and execute BEFORE the
+; newly-scheduled attempts got their turn -- exactly the premature-
+; completion failure mode the design was meant to prevent. Fixed by
+; also removing and re-adding output-status, with the same
+; (matched . counter) payload (only its queue POSITION needs to
+; change here, not its data), after the new attempts and after this
+; relation's own re-add.
+(defrel (enqueue-flip-known-matcheso agenda belief ops)
+  (fresh (status-id matched counter new-pairs
+          attempt-ops ops0 ops1 ops2)
+    (conj
+      (find-taggedo agenda (matched . counter) status-id)
+      (find-new-matches-collecto belief matched new-pairs)
+      (disj
+        (conj
+          (== new-pairs ())
+          (no-ops ops))
+        (fresh (dummy)
+          (conj
+            (=/= new-pairs ())
+            (pairs->add-attempts-opso new-pairs attempt-ops)
+            (== ops0 attempt-ops)
+            (cons-ops
+              (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+                   belief)
+              ops0 ops1)
+            (cons-ops (remove status-id) ops1 ops2)
+            (cons-ops
+              (add (rel (a b r) (call output-statuso a b r))
+                   (matched . counter))
+              ops2 ops)))))))
+
+; output-statuso: one-shot, terminal. args is (matched-pairs . counter).
+; Reports the final state. Never re-adds itself.
+(defrel (output-statuso agenda args ops)
+  (fresh (matched counter)
+    (conj
+      (== args (matched . counter))
+      (cons-ops (output (final-status matched counter)) (no-ops) ops))))
+
+; main: seed all 10 initial entries in one ChangeSet: 8 fixed attempts
+; (pairs (0.1) (2.3) ... (14.15) -- deliberately NOT matching the
+; board's real pairing shown in attempto's board literal above, so
+; most attempts are expected to find no-match, exercising
+; enqueue-flip-known-matcheso for real), enqueue-flip-known-matcheso
+; holding the initial all-unknown belief, and output-status holding
+; empty matched-pairs and counter 0.
+(defrel (main args ops)
+  (fresh (initial-belief
+          ops0 ops1 ops2 ops3 ops4 ops5 ops6 ops7 ops8)
+    (conj
+      (all-unknowno 16 initial-belief)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (0 . 1))
+                (no-ops) ops0)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (2 . 3))
+                ops0 ops1)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (4 . 5))
+                ops1 ops2)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (6 . 7))
+                ops2 ops3)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (8 . 9))
+                ops3 ops4)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (10 . 11))
+                ops4 ops5)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (12 . 13))
+                ops5 ops6)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (14 . 15))
+                ops6 ops7)
+      (cons-ops
+        (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+             initial-belief)
+        ops7 ops8)
+      (cons-ops
+        (add (rel (a b r) (call output-statuso a b r)) (() . 0))
+        ops8 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

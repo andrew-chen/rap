@@ -58,3 +58,4 @@ security/security_test
 raprunner
 repl
 security/security_test
+raprunner_asan
