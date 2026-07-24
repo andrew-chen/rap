@@ -329,6 +329,45 @@ every isolated piece passed, do not assume the isolated tests must
 therefore be wrong; the bug may be a scale-dependent one that isolated
 testing structurally cannot catch.
 
+### 9. Hardcoded constants need their documented domain constraints
+   checked explicitly — structural tracing alone won't catch this
+
+A hardcoded seed value (`424242`) was passed to `lcg-nth-o`/
+`lcg-nexto` without checking it against `lcg-nexto`'s own documented
+constraint: the LCG's modulus is `65536` (a 16-bit range — see
+`prng.rap`'s own comments), so any seed at or above that value is
+already "wrapped" in a sense the multiplier arithmetic doesn't
+tolerate. Concretely, `32765 × 424242 ≈ 13.9 billion` — more than 6×
+`INT32_MAX` — so `mulo` (correctly, per the overflow fix in Part 4)
+returned `NoYield`, collapsing the entire goal chain silently, with no
+error message beyond the caller's own generic "produced no solution."
+
+**What made this hard to find**: two full rounds of careful, correct
+static tracing through compiled BVar output (checking argument order,
+relation composition, entry shapes — everything described in items
+1-8 above) found nothing wrong, because there *was* nothing
+structurally wrong. The bug was a plain arithmetic domain violation on
+a literal value, not a logic or composition error — exactly the kind
+of thing structural tracing is not designed to catch, since it was
+looking for "is this wired together correctly" rather than "is this
+constant even a legal input." `--trace` producing zero dynamic output
+(no ChangeSet dumps, no Probe outcomes) turned out to be the correct
+and sufficient clue — it meant the failure was very early, before any
+`Probe` was reached — but even with that clue in hand, the actual
+fix required checking one specific relation's own documented domain
+constraint against one specific literal, not further structural
+tracing.
+
+**Standing rule**: when a relation with a documented input range or
+domain constraint (e.g. `lcg-nexto`'s implicit `[0, 65535]` seed
+range, or `divo`/`modo`'s `b > 0` requirement) is called with a
+hardcoded literal, explicitly check that literal against the
+constraint before trusting the call — do not just check that the
+relation is being called with the right number of arguments in the
+right order. This is a distinct check from every other item in this
+list, and is easy to skip precisely because "the code looks right"
+structurally.
+
 ## Part 3: Working with `Probe`
 
 `(probe Goal Condition Budget Sandbox ReqGround)`:

@@ -209,10 +209,19 @@
 (defrel (board-ato board pos val)
   (nth-ato board pos val))
 
-; attempto: one-shot. args is the fixed (pos1 . pos2) pair this
-; attempt is responsible for. Reveals both positions, determines
-; match/no-match, reports the result, updates the shared belief entry
-; and output-status accordingly, and never re-adds itself.
+; attempto: one-shot. args is now the TAGGED term (attempt pos1 pos2)
+; -- previously a bare (pos1 . pos2) pair, changed for consistency
+; with every other agenda-entry kind (belief-state, output-status)
+; and to avoid the untagged-shape risk flagged in the programming
+; guide (Part 2, item 6), specifically so an entry's KIND can always
+; be determined from its own args shape alone -- needed by Stage 3's
+; antagonist re-add logic, which must be able to tell "is this
+; agenda entry an ordinary attempt" without relying on shape
+; inference (a bare pair could otherwise be mistaken for -- or
+; conflict with -- some other untagged data). Reveals both positions,
+; determines match/no-match, reports the result, updates the shared
+; belief entry and output-status accordingly, and never re-adds
+; itself.
 ;
 ; CHANGED from Stage 2.5: the board is no longer a hardcoded literal
 ; here. It is looked up from output-status's payload (first field),
@@ -227,7 +236,7 @@
           val1 val2 outcome
           ops0 ops1 ops2 ops3)
     (conj
-      (== args (pos1 . pos2))
+      (== args (attempt pos1 pos2))
       (find-taggedo agenda (belief-state old-belief) belief-id)
       (find-taggedo agenda (output-status board old-matched old-counter)
                     status-id)
@@ -266,15 +275,23 @@
 ; pairs->add-attempts-opso: fold a list of newly-discovered pairs into
 ; a ChangeSet of add operations, one attempto entry per pair. Mirrors
 ; qids->remove-opso's fold shape from the paper's Section 5.2.
+;
+; NOTE: `pairs` itself stays a plain list of (pos1 . pos2) dotted
+; pairs internally (this is find-new-matches-collecto's own output
+; shape, unrelated to and unaffected by the agenda-entry tagging
+; change below) -- only the ADD operation's payload is reshaped into
+; the tagged (attempt pos1 pos2) form each new attempt entry now
+; needs.
 (defrel (pairs->add-attempts-opso pairs ops)
   (disj
     (conj (== pairs ()) (no-ops ops))
-    (fresh (pair rest ops-tail)
+    (fresh (pair rest ops-tail pos1 pos2)
       (conj
         (== pairs (pair . rest))
+        (== pair (pos1 . pos2))
         (pairs->add-attempts-opso rest ops-tail)
         (cons-ops
-          (add (rel (a b r) (call attempto a b r)) pair)
+          (add (rel (a b r) (call attempto a b r)) (attempt pos1 pos2))
           ops-tail ops)))))
 
 ; enqueue-flip-known-matcheso: args arrives as the TAGGED term
@@ -362,21 +379,21 @@
       (== multiset (a a b b c c d d e e f f g g h h))
       (shuffleo multiset 42 15 shuffled final-seed)
       (all-unknowno 16 initial-belief)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (0 . 1))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 0 1))
                 (no-ops) ops0)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (2 . 3))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 2 3))
                 ops0 ops1)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (4 . 5))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 4 5))
                 ops1 ops2)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (6 . 7))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 6 7))
                 ops2 ops3)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (8 . 9))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 8 9))
                 ops3 ops4)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (10 . 11))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 10 11))
                 ops4 ops5)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (12 . 13))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 12 13))
                 ops5 ops6)
-      (cons-ops (add (rel (a b r) (call attempto a b r)) (14 . 15))
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 14 15))
                 ops6 ops7)
       (cons-ops
         (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
