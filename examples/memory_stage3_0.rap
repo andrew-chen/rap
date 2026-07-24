@@ -1,42 +1,37 @@
-; memory_stage2_6_oddfix.rap — Stage 2.6 game, with
-; find-new-matches-collecto (and its notin-pairso/has-new-pairo
-; dependencies) REPLACED by new-find-matches-o, the from-scratch,
-; odd-count-safe rewrite built and independently verified across
-; this project's most recent stretch of work (oddo/eveno, mapo/
-; filtero, group-pairso, distinct-valueso, process-one-valueo,
-; process-all-valueso -- see test_new_find_matches.rap for the final
-; integration test of this exact replacement).
+; memory_stage3_0.rap — Stage 3: the full adversarial memory game.
 ;
-; PURPOSE OF THIS FILE: verify the new logic is INERT-BUT-PRESENT
-; against the known-working, non-adversarial Stage 2.6 game -- this
-; board never produces an odd-count value (every value appears
-; exactly twice, since there is no antagonist here to create
-; staleness), so new-find-matches-o's odd-count-specific machinery
-; should never actually be exercised. This file's whole purpose is to
-; confirm swapping in the replacement does not change the game's
-; observable behavior AT ALL relative to memory_stage2_6.rap --
-; same board seed, same attempt pairing, same expected final matched
-; pairs -- before ever combining this with the antagonist (Stage 3),
-; where the odd-count path will actually matter for real.
+; This file merges two previously-separate, independently-verified
+; dependency chains: the non-adversarial game loop (belief, attempts,
+; enqueue-flip-known-matcheso with the odd-count-safe new-find-
+; matches-o replacement for find-new-matches-collecto, output-status,
+; board generation via shuffleo) and the antagonist (antagonisto:
+; picks two random unmatched positions each turn via the PRNG, swaps
+; their board values, and conditionally re-adds itself based on
+; whether attempts remain, whether at least half the cards are still
+; unmatched, and whether a LATER antagonist has already taken over
+; the re-adding duty).
 ;
-; Named distinctly from memory_stage2_6.rap (rather than overwriting
-; it) specifically so the two files can be diffed directly against
-; each other later, per explicit request, without needing to hunt
-; through version history.
+; SEEDING: main interleaves an antagonist entry after each of the
+; first 7 initial attempts (NOT all 8) -- see main's own comment
+; below for exactly why the 8th was deliberately dropped; this was a
+; real, confirmed design finding from this file's own first test run,
+; not an arbitrary choice.
 ;
-; Everything below is IDENTICAL to memory_stage2_6.rap except:
-;   - notin-pairso, has-new-pairo, find-new-matches-collecto are
-;     REMOVED (replaced by the new-find-matches-o dependency chain)
-;   - oddo, eveno, mapo, filtero, group-pairso, distinct-valueso
-;     (and its own already-seeno/tag-in-listo dependencies),
-;     positions-with-valueo, not-matchedo, exclude-matchedo,
-;     process-one-valueo, process-all-valueso, new-find-matches-o
-;     are ADDED (copied byte-for-byte from their respective verified
-;     test files)
-;   - enqueue-flip-known-matcheso's one call site is updated from
-;     find-new-matches-collecto to new-find-matches-o
+; All Probe budgets across both dependency chains were bumped from
+; their original 100/300 to 1000, before ever running this file
+; against the real ~17-entry initial agenda, given every isolated
+; antagonist test that established those budgets only ever ran
+; against tiny (3-4 entry) hand-built agendas (see the programming
+; guide, Part 2 item 8, for the general lesson this follows).
 ;
-; Run with: ./raprunner memory_stage2_6_oddfix.rap < /dev/null
+; prog_arena's backing buffer (prog_buf in raprunner.cpp) needed to
+; grow from 256 KiB to 2 MiB to parse a program this size without
+; OOM-ing -- confirmed to be a straightforward buffer-size issue, not
+; a sign of any parsing bug, given this file is roughly 4x larger
+; than anything parsed successfully before it.
+;
+; Run with: ./raprunner memory_stage3_0.rap < /dev/null
+
 
 ;; --- copied verbatim from memory_stage2_0.rap ---
 
@@ -625,22 +620,42 @@
         (no-ops) ops))))
 
 ; main: Stage 3 -- SAME board seed (42) and same 8 fixed attempt
-; pairs as memory_stage2_6.rap, but now with an antagonisto entry
-; interleaved after EACH initial attempt (per the original Stage 3
-; design: "we could have the antagonist between every attempt to
-; start with... only the first one would re-add itself" -- the
-; tail-check in should-readd-o is exactly what makes this safe: once
-; the first antagonist to run re-adds itself, every LATER antagonist
-; in this initial interleaved batch will find (via tail-is-handoffo)
-; that a later antagonist has already taken over re-adding duty, and
-; will correctly decline to re-add itself in turn).
+; pairs as memory_stage2_6.rap, with an antagonisto entry interleaved
+; after each of the FIRST 7 initial attempts only -- NOT after the
+; 8th (attempt 14 15).
 ;
-; 16 attempt/antagonist adds (8 pairs) + belief-state + output-status
-; = 18 total cons-ops calls, threading ops0 through ops17.
+; WHY ONLY 7, NOT 8: this file's own first real test run revealed a
+; genuine design finding (not a coding bug): with all 8 antagonists
+; seeded, main's OWN tail -- [..., antagonist#8, belief-state,
+; output-status] -- already coincidentally contains one of each tag
+; tail-is-handoffo checks for (antagonist, output-status, belief-
+; state), from the very moment ANY antagonist first runs, regardless
+; of whether a later antagonist has genuinely "taken over" anything
+; yet. This made EVERY one of the 8 initial antagonists incorrectly
+; believe a handoff had already happened, so all 8 declined to re-add
+; themselves (confirmed via a real run: 8 straight
+; "antagonist-decision no" lines, one per initial attempt) -- the
+; antagonist was silently inert for the entire initial phase, not
+; corrupting anything, but never actually acting either.
+;
+; Dropping just the 8th antagonist (the one immediately preceding
+; belief-state/output-status in the seed order) removes this
+; coincidence: the first antagonist to run now sees a tail of
+; [attempt(14,15), belief-state, output-status] -- missing the
+; `antagonist` tag entirely -- so tail-is-handoffo correctly reports
+; false, and the intended handoff logic (a later antagonist genuinely
+; re-adding itself causes EARLIER antagonists in this initial batch,
+; when they eventually get dequeued after it, to see it in a
+; belief-state/output-status-adjacent tail and correctly decline) can
+; actually do its job as designed for antagonists #2 through #7.
+;
+; 15 attempt/antagonist adds (8 attempts + 7 antagonists) +
+; belief-state + output-status = 17 total cons-ops calls, threading
+; ops0 through ops16.
 (defrel (main args ops)
   (fresh (multiset shuffled final-seed initial-belief
           ops0 ops1 ops2 ops3 ops4 ops5 ops6 ops7 ops8 ops9
-          ops10 ops11 ops12 ops13 ops14 ops15 ops16 ops17)
+          ops10 ops11 ops12 ops13 ops14 ops15 ops16)
     (conj
       (== multiset (a a b b c c d d e e f f g g h h))
       (shuffleo multiset 42 15 shuffled final-seed)
@@ -675,17 +690,15 @@
                 ops12 ops13)
       (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 14 15))
                 ops13 ops14)
-      (cons-ops (add (rel (a b r) (call antagonisto a b r)) (antagonist))
-                ops14 ops15)
       (cons-ops
         (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
              (belief-state initial-belief))
-        ops15 ops16)
+        ops14 ops15)
       (cons-ops
         (add (rel (a b r) (call output-statuso a b r))
              (output-status shuffled () 0))
-        ops16 ops17)
-      (== ops ops17))))
+        ops15 ops16)
+      (== ops ops16))))
 
 (defrel (handle_input agenda fd input ops)
   (call no-ops ops))
