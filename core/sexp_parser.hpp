@@ -1186,36 +1186,46 @@ inline ParsedQuery parse_query(Arena& a, Arena& sym_a, const char* src,
 // ============================================================================
 // Printing
 // ============================================================================
-inline void print_term(Term t);
 
-inline void print_list(Term t) {
-  std::printf("(");
+// fprint_term / fprint_list: write to an arbitrary FILE*.
+// Use these for debug/trace output (stderr) or anywhere a file pointer is needed.
+// print_term / print_list are thin wrappers to stdout for backward compatibility.
+inline void fprint_term(std::FILE* fp, Term t);
+
+inline void fprint_list(std::FILE* fp, Term t) {
+  std::fprintf(fp, "(");
   bool first = true;
   while (true) {
-    if (t.tag == TermTag::Nil) { std::printf(")"); return; }
+    if (t.tag == TermTag::Nil) { std::fprintf(fp, ")"); return; }
     if (t.tag != TermTag::Pair || !t.pair) {
-      std::printf(" . "); print_term(t); std::printf(")"); return;
+      std::fprintf(fp, " . "); fprint_term(fp, t); std::fprintf(fp, ")"); return;
     }
     const PairNode* p = t.pair;
-    if (!first) std::printf(" ");
-    print_term(p->car);
+    if (!first) std::fprintf(fp, " ");
+    fprint_term(fp, p->car);
     t     = p->cdr;
     first = false;
   }
 }
 
-inline void print_term(Term t) {
+inline void fprint_term(std::FILE* fp, Term t) {
   switch (t.tag) {
-    case TermTag::Int:  std::printf("%d", t.value); break;
-    case TermTag::Nil:  std::printf("()"); break;
-    case TermTag::Var:  std::printf("_.%u", t.id); break;
-    case TermTag::BVar: std::printf("b_.%u", t.id); break;
-    case TermTag::Sym:  std::printf("%s", t.sym ? t.sym->str : "<sym?>"); break;
-    case TermTag::Pair: print_list(t); break;
-    case TermTag::Rel:  std::printf("#<rel/%u>", t.rel ? t.rel->param_count : 0); break;
-    default:            std::printf("<term?>"); break;
+    case TermTag::Int:  std::fprintf(fp, "%d", t.value); break;
+    case TermTag::Nil:  std::fprintf(fp, "()"); break;
+    case TermTag::Var:  std::fprintf(fp, "_.%u", t.id); break;
+    case TermTag::BVar: std::fprintf(fp, "b_.%u", t.id); break;
+    case TermTag::Sym:  std::fprintf(fp, "%s", t.sym ? t.sym->str : "<sym?>"); break;
+    case TermTag::Pair: fprint_list(fp, t); break;
+    case TermTag::Rel:  std::fprintf(fp, "#<rel/%u>", t.rel ? t.rel->param_count : 0); break;
+    default:            std::fprintf(fp, "<term?>"); break;
   }
 }
+
+inline void print_term(Term t);
+
+inline void print_list(Term t) { fprint_list(stdout, t); }
+
+inline void print_term(Term t) { fprint_term(stdout, t); }
 
 inline void print_goal(const Goal* g, int indent = 0) {
   if (!g) { std::printf("<null-goal>"); return; }

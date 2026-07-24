@@ -62,3 +62,6 @@ raprunner_asan
 raprunner
 raprunner
 raprunner
+raprunner
+repl
+security/security_test

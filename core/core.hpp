@@ -902,6 +902,10 @@ protected:
       std::uint32_t   arg_count,
       State&          st);
 
+  // Called after every Probe completes, with the actual and expected outcomes.
+  // Default is a no-op; subclasses override to add tracing.
+  virtual void onProbeResult(Outcome /*got*/, Outcome /*want*/) {}
+
   Arena*             arena_;
   Arena*             sym_arena_;  // STAGE_ARITH: for stable symbol allocation
   Intern*            intern_;     // STAGE_ARITH: for charo and built-in name interning
@@ -1660,6 +1664,8 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
       // inside the probe advanced client_region_.client_count; undo that here
       // so probe ops do not appear in the outer ChangeSet regardless of sandbox.
       client_region_.client_count = st.saved_client_count;
+
+      onProbeResult(got, want);
 
       if (got != want) return StepResult::NoYield;
 

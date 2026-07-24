@@ -84,6 +84,10 @@ public:
       cs->op_count = client_region_.client_count;
   }
 
+  // Enable probe-outcome tracing (prints each Probe result to stderr).
+  // Set before runN(); safe to toggle between queries.
+  void set_trace(bool on) { trace_ = on; }
+
 protected:
   StepResult handleUnknownRelation(
       const SymEntry* name,
@@ -91,7 +95,15 @@ protected:
       std::uint32_t   arg_count,
       State&          st) override;
 
+  void onProbeResult(Outcome got, Outcome want) override {
+    if (!trace_) return;
+    static const char* const names[] = { "true", "false", "insufficient", "bounded" };
+    std::fprintf(stderr, "[probe] got=%-12s want=%s\n",
+                 names[static_cast<int>(got)], names[static_cast<int>(want)]);
+  }
+
 private:
+  bool trace_ = false;
   const SymEntry* sym_no_ops_    = nullptr;
   const SymEntry* sym_cons_ops_  = nullptr;
   const SymEntry* sym_empty_ops_ = nullptr;

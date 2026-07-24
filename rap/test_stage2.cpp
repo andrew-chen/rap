@@ -302,6 +302,45 @@ int main() {
         }
     }
 
+    // =========================================================================
+    // Test C: agenda Var-scan regression — after remove() compaction, no
+    // live entry's args should contain a bare Var node.
+    //
+    // This directly tests the deep_copy_term overlap fix: before the fix,
+    // a Var(2) appeared in id=45's args after remove() compacted it into a
+    // smaller gap.  The test runs strengthen-agendao (which calls remove
+    // twice: Remove(10) and Remove(12)) and verifies the two surviving
+    // entries (id=11, id=13) have no Var nodes in their args.
+    //
+    // The lambda mimics what --trace's scan_agenda_for_vars does.
+    // =========================================================================
+    {
+        // Re-use the loop from the main test above: after loop.run_one(),
+        // loop.agenda holds entries id=11 and id=13.
+        bool found_var = false;
+
+        std::function<bool(Term)> has_var = [&](Term t) -> bool {
+            if (t.tag == TermTag::Var) return true;
+            if (t.tag == TermTag::Pair && t.pair)
+                return has_var(t.pair->car) || has_var(t.pair->cdr);
+            return false;
+        };
+
+        std::uint32_t pos = loop.agenda.tail;
+        for (std::uint32_t i = 0; i < loop.agenda.count; ++i) {
+            const QueryEntry* e =
+                reinterpret_cast<const QueryEntry*>(loop.agenda.buf + pos);
+            if (has_var(e->args)) {
+                found_var = true;
+                std::printf("FAIL (Test C): Var found in entry id=%u args\n", e->id);
+            }
+            pos += e->byte_size;
+        }
+
+        EXPECT(!found_var,
+               "Test C: no stray Var nodes in agenda entries after remove compaction");
+    }
+
     std::printf("\n%d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

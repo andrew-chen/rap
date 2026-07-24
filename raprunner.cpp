@@ -53,6 +53,64 @@ alignas(64) static std::uint8_t wrap_buf[64 * 1024];
 
 
 // ============================================================================
+// Trace helpers: term printing to FILE*, ChangeSet dump, agenda Var scan.
+// Active only when --trace is passed; zero overhead otherwise.
+// ============================================================================
+
+// has_var: true if any Var node appears anywhere in t's tree.
+static bool has_var(Term t) {
+    if (t.tag == TermTag::Var) return true;
+    if (t.tag == TermTag::Pair && t.pair)
+        return has_var(t.pair->car) || has_var(t.pair->cdr);
+    return false;
+}
+
+// scan_agenda_for_vars: walk every live entry's args for stray Var nodes.
+// Prints to stderr only when one is found; silent on a clean agenda.
+static void scan_agenda_for_vars(const Agenda& agenda, const char* when) {
+    std::uint32_t pos = agenda.tail;
+    for (std::uint32_t i = 0; i < agenda.count; ++i) {
+        const QueryEntry* e =
+            reinterpret_cast<const QueryEntry*>(agenda.buf + pos);
+        if (has_var(e->args)) {
+            std::fprintf(stderr,
+                "[trace] VAR in agenda entry id=%u after %s: args=",
+                e->id, when);
+            fprint_term(stderr, e->args);
+            std::fprintf(stderr, "\n");
+            std::fflush(stderr);
+        }
+        pos += e->byte_size;
+    }
+}
+
+// print_changeset: dump ChangeSet contents to stderr before applying.
+static void print_changeset(const ChangeSet& cs) {
+    std::fprintf(stderr, "[changeset] %u op(s):\n", cs.op_count);
+    for (std::uint32_t i = 0; i < cs.op_count; ++i) {
+        const Op& op = cs.ops[i];
+        switch (op.tag) {
+            case OpTag::Add:
+                std::fprintf(stderr, "  [%u] add  rel=", i);
+                fprint_term(stderr, op.add.rel_term);
+                std::fprintf(stderr, " args=");
+                fprint_term(stderr, op.add.args);
+                std::fprintf(stderr, "\n");
+                break;
+            case OpTag::Remove:
+                std::fprintf(stderr, "  [%u] remove qid=%u\n", i, op.query_id);
+                break;
+            case OpTag::Output:
+                std::fprintf(stderr, "  [%u] output=", i);
+                fprint_term(stderr, op.output_term);
+                std::fprintf(stderr, "\n");
+                break;
+        }
+    }
+    std::fflush(stderr);
+}
+
+// ============================================================================
 // apply_changeset: apply the ops from a ChangeSet to the agenda / stdout
 // ============================================================================
 static void apply_changeset(const ChangeSet& cs,
@@ -90,13 +148,21 @@ static void run_one(RapEvaluator& evaluator,
                     RelEnv&       rel_env,
                     Arena&        eval_arena,
                     Arena&        intern_arena,
-                    bool          verbose = false) {
+                    bool          verbose = false,
+                    bool          trace   = false) {
     QueryEntry entry;
     if (!agenda.dequeue(entry)) return;
 
     if (verbose) {
-        std::fprintf(stderr, "[run_one] start id=%u nparams=%u\n",
-                     entry.id, entry.query_term.rel ? entry.query_term.rel->param_count : 0);
+        std::uint32_t np =
+            entry.query_term.rel ? entry.query_term.rel->param_count : 0;
+        std::fprintf(stderr, "[run_one] start id=%u nparams=%u bsz=%u",
+                     entry.id, np, entry.byte_size);
+        if (np == 3) {
+            std::fprintf(stderr, " args=");
+            fprint_term(stderr, entry.args);
+        }
+        std::fprintf(stderr, "\n");
         std::fflush(stderr);
     }
 
@@ -148,7 +214,9 @@ static void run_one(RapEvaluator& evaluator,
                      entry.id, cs ? cs->op_count : 999);
         std::fflush(stderr);
     }
+    if (trace && cs) print_changeset(*cs);
     if (cs) apply_changeset(*cs, agenda, intern_arena);
+    if (trace) scan_agenda_for_vars(agenda, "apply");
 
     if (verbose) {
         print_arena_usage("eval_arena (run)",  eval_arena);
@@ -169,7 +237,8 @@ static bool call_main(RapEvaluator& evaluator,
                       RelEnv&       rel_env,
                       Arena&        eval_arena,
                       Arena&        intern_arena,
-                      bool          verbose = false) {
+                      bool          verbose = false,
+                      bool          trace   = false) {
     evaluator.init_changeset();
 
     // Build: (call main-rel args-term var(0))
@@ -204,7 +273,9 @@ static bool call_main(RapEvaluator& evaluator,
     }
 
     ChangeSet* cs = evaluator.get_changeset();
+    if (trace && cs) print_changeset(*cs);
     if (cs) apply_changeset(*cs, agenda, intern_arena);
+    if (trace) scan_agenda_for_vars(agenda, "main-apply");
 
     if (verbose) {
         print_arena_usage("eval_arena (main)", eval_arena);
@@ -428,19 +499,25 @@ static void load_stdlib(Arena& prog_arena, Arena& intern_arena, Intern& intern,
 // ============================================================================
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "Usage: raprunner <program-file> [args...] [--fd N]...\n");
+        std::fprintf(stderr,
+            "Usage: raprunner <program-file> [args...] [--fd N]... "
+            "[--verbose] [--trace]\n");
         return 1;
     }
 
     // ---- Parse command line ------------------------------------------------
     const char* program_file = argv[1];
     bool verbose = false;
+    bool trace   = false;
     std::vector<const char*> user_args;
     std::vector<int> extra_fds;
 
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--verbose") == 0) {
             verbose = true;
+        } else if (std::strcmp(argv[i], "--trace") == 0) {
+            trace   = true;
+            verbose = true;  // --trace implies --verbose
         } else if (std::strcmp(argv[i], "--fd") == 0) {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "raprunner: --fd requires an argument\n");
@@ -484,6 +561,7 @@ int main(int argc, char** argv) {
     alignas(alignof(RapEvaluator)) std::uint8_t evaluator_buf[sizeof(RapEvaluator)];
     RapEvaluator* evaluator =
         new (evaluator_buf) RapEvaluator(&eval_arena, &rap_arena, &intern, &syms);
+    evaluator->set_trace(trace);
 
     // ---- Load stdlib then program file -------------------------------------
     RelEnv rel_env{};
@@ -533,7 +611,7 @@ int main(int argc, char** argv) {
 
     // ---- Call main ---------------------------------------------------------
     if (!call_main(*evaluator, main_rel, args_term, agenda, rel_env,
-                   eval_arena, intern_arena, verbose)) {
+                   eval_arena, intern_arena, verbose, trace)) {
         return 1;
     }
 
@@ -547,7 +625,7 @@ int main(int argc, char** argv) {
         // Run agenda until empty — every entry is runnable.
         if (!agenda.empty()) {
             run_one(*evaluator, agenda, spine, rel_env,
-                    eval_arena, intern_arena, verbose);
+                    eval_arena, intern_arena, verbose, trace);
         } else {
             // Agenda empty. Reset wrap_arena — all wrappers have executed.
             wrap_arena.reset();
