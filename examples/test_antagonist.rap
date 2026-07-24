@@ -1,0 +1,390 @@
+; test_antagonist.rap — isolated test of antagonisto, composing the
+; five previously-verified building blocks (lcg-nth-o,
+; unmatched-positionso, pick-two-distincto, last-n-o,
+; tail-has-all-threeo) into the actual antagonist relation, before
+; wiring it into the full Stage 3 game loop.
+;
+; Scope: hand-build an agenda containing an antagonist entry plus a
+; few other entries, run the antagonist once, and check: (a) the
+; ChangeSet correctly swaps two unmatched positions' values in the
+; board and remove+re-adds output-status with the new board, (b) the
+; re-add decision is correct given the hand-built agenda's contents.
+;
+; Dependencies: copies in every previously-verified helper, byte-for-
+; byte, from their respective test files. find-by-contento is already
+; in stdlib/core.rap, not copied.
+;
+; Run with: ./raprunner test_antagonist.rap < /dev/null
+
+;; --- copied verbatim from test_lcg_nth.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-seqo seed n out-seq final-seed)
+  (disj
+    (conj (eqo n 0) (== out-seq ()) (== final-seed seed))
+    (fresh (n1 next rest)
+      (conj
+        (gto n 0)
+        (subo n 1 n1)
+        (lcg-nexto seed next)
+        (== out-seq (next . rest))
+        (lcg-seqo next n1 rest final-seed)))))
+
+(defrel (lcg-nth-o seed n result)
+  (fresh (discarded-seq)
+    (lcg-seqo seed n discarded-seq result)))
+
+;; --- copied verbatim from test_unmatched_positions.rap ---
+
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+(defrel (range-o lo hi result)
+  (disj
+    (conj (geqo lo hi) (== result ()))
+    (fresh (lo1 rest)
+      (conj
+        (lto lo hi)
+        (addo lo 1 lo1)
+        (range-o lo1 hi rest)
+        (== result (lo . rest))))))
+
+(defrel (unmatched-positionso matched-pairs unmatched)
+  (fresh (all-positions)
+    (conj
+      (range-o 0 16 all-positions)
+      (filter-unmatchedo all-positions matched-pairs unmatched))))
+
+(defrel (filter-unmatchedo positions matched-pairs unmatched)
+  (disj
+    (conj (== positions ()) (== unmatched ()))
+    (fresh (pos rest tail)
+      (conj
+        (== positions (pos . rest))
+        (disj
+          (conj
+            (probe (position-in-pairso matched-pairs pos) true 100 true false)
+            (filter-unmatchedo rest matched-pairs unmatched))
+          (conj
+            (probe (position-in-pairso matched-pairs pos) false 100 true false)
+            (filter-unmatchedo rest matched-pairs tail)
+            (== unmatched (pos . tail))))))))
+
+;; --- copied verbatim from test_pick_two.rap ---
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+(defrel (length-o lst n)
+  (disj
+    (conj (== lst ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== lst (head . tail))
+        (length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (remove-nth-ato lst idx result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result tail))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (remove-nth-ato tail idx1 new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (pick-two-distincto lst seed val1 val2 next-seed)
+  (fresh (len seed1 i remaining len1 j)
+    (conj
+      (length-o lst len)
+      (lcg-rangeo seed len seed1 i)
+      (nth-ato lst i val1)
+      (remove-nth-ato lst i remaining)
+      (length-o remaining len1)
+      (lcg-rangeo seed1 len1 next-seed j)
+      (nth-ato remaining j val2))))
+
+;; --- copied verbatim from test_last_n.rap ---
+
+(defrel (drop-o lst k result)
+  (disj
+    (conj (== k 0) (== result lst))
+    (fresh (head tail k1)
+      (conj
+        (gto k 0)
+        (== lst (head . tail))
+        (subo k 1 k1)
+        (drop-o tail k1 result)))))
+
+(defrel (last-n-o lst n result)
+  (fresh (len skip)
+    (conj
+      (length-o lst len)
+      (subo len n skip)
+      (drop-o lst skip result))))
+
+;; --- copied verbatim from test_tail_check.rap ---
+
+(defrel (entry-tago entry tag)
+  (fresh (id rel-term args rest)
+    (== entry (id rel-term args))
+    (== args (tag . rest))))
+
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+(defrel (tail-has-all-threeo entries)
+  (fresh (e1 e2 e3 t1 t2 t3 tags)
+    (conj
+      (== entries (e1 e2 e3))
+      (entry-tago e1 t1)
+      (entry-tago e2 t2)
+      (entry-tago e3 t3)
+      (== tags (t1 t2 t3))
+      (tag-in-listo tags antagonist)
+      (tag-in-listo tags output-status)
+      (tag-in-listo tags belief-state))))
+
+;; --- new: find-taggedo, needed for locating output-status ---
+
+(defrel (find-taggedo agenda contents id)
+  (find-by-contento agenda contents id))
+
+;; --- new: swap-positionso, applying the picked swap to the board ---
+
+; swap-positionso: given a board (flat 16-value list) and two
+; positions, produce a new board with those two positions' VALUES
+; exchanged. Note this is conceptually the same operation as
+; swap-nth (Stage 2.6's shuffle support), just named/framed for this
+; context; reusing swap-nth directly rather than redefining it, since
+; it operates on indices exactly the same way.
+(defrel (swap-positionso board pos1 pos2 new-board)
+  (fresh (val1 val2 mid)
+    (conj
+      (nth-ato board pos1 val1)
+      (nth-ato board pos2 val2)
+      (set-nth-ato board pos1 val2 mid)
+      (set-nth-ato mid pos2 val1 new-board))))
+
+(defrel (set-nth-ato lst idx new-val result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result (new-val . tail)))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (set-nth-ato tail idx1 new-val new-tail)
+          (== result (head . new-tail)))))))
+
+;; --- the antagonist itself ---
+
+; antagonisto: agenda is the current agenda (needed for the re-add
+; decision -- see NOTE below), args is just (antagonist) -- no data
+; carried, per the design decision that the antagonist needs nothing
+; beyond a recognizable tag, since its PRNG state is derived fresh
+; each run from a hardcoded seed plus output-status's own counter.
+;
+; PRNG SEED HARDCODING: 4242 is the fixed initial seed for the
+; antagonist's random position selection, hardcoded at this call site
+; only (per the design decision that lcg-nth-o itself stays general-
+; purpose, with hardcoding happening only where a fresh random value
+; is actually wanted) -- changeable by hand for testing, as intended.
+; NOTE: seed must be in [0, 65535]; lcg-nexto computes 32765*seed+12345
+; and mulo overflows INT32_MAX for any seed > 65542.
+;
+; NOTE -- SCOPE OF THIS DRAFT: this version implements ONLY the swap
+; mechanics (find output-status, derive a PRNG value, pick two
+; unmatched positions, swap them, remove+re-add output-status). It
+; does NOT yet implement the conditional re-add-itself decision
+; (stopping when no attempts remain, when fewer than half the cards
+; are unmatched, or when the tail-check finds a later antagonist
+; already took over) -- that is deliberately deferred to a subsequent
+; isolated test, the same incremental-and-tested approach used
+; throughout this project, rather than writing the whole thing at
+; once and hoping. An earlier draft of this file left three unused
+; fresh-variable placeholders (remaining-agenda, has-attempts,
+; should-readd) as an implicit reminder this logic was still needed
+; -- caught during the mandatory collision check and removed here,
+; since dead placeholder variables are exactly the kind of thing that
+; could be mistaken for "already handled" by a future reader.
+(defrel (antagonisto agenda args ops)
+  (fresh (status-id board matched counter
+          prng-seed unmatched pos1 pos2 unused-next-seed
+          new-board ops0)
+    (conj
+      (find-taggedo agenda (output-status board matched counter) status-id)
+      (lcg-nth-o 4242 counter prng-seed)
+      (unmatched-positionso matched unmatched)
+      (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
+      (swap-positionso board pos1 pos2 new-board)
+      (cons-ops (remove status-id) (no-ops) ops0)
+      (cons-ops
+        (add (rel (a b r) (call output-statuso a b r))
+             (output-status new-board matched counter))
+        ops0 ops))))
+
+;; --- placeholder output-statuso, for this isolated test only ---
+;; (a minimal stand-in, not the real Stage 3 output-statuso, just
+;; enough to make (add (rel ...) ...) syntactically well-formed --
+;; it is never actually invoked in this test, since main only runs
+;; antagonisto directly via a plain call, not through the agenda.)
+(defrel (output-statuso agenda args ops)
+  (call no-ops ops))
+
+;; --- test cases ---
+
+; TEST 1 -- run antagonisto directly (not through the agenda's own
+; dequeue mechanism -- this test calls it as an ordinary relation,
+; passing a hand-built agenda term, to check its ChangeSet-computing
+; logic in isolation, the same spirit as memory_stage2_4's
+; flip-agendao test before the ChangeSet-cannot-be-output lesson was
+; learned -- so here we do NOT try to print the ChangeSet directly,
+; only inspect intermediate values that ARE ordinary printable data).
+;
+; Board: (a b a f g c e b e h d d c g h f) -- the SAME board used in
+; earlier hand-verified Stage 2.6 runs, so real matching pairs are
+; already known: (0,2)=a (1,7)=b (4,13)=g (5,12)=c (6,8)=e (9,14)=h
+; (10,11)=d (3,15)=f.
+;
+; matched-pairs = ((10 . 11)) -- one pair already found, matching
+; Stage 2.6's own earlier example. counter = 5 (arbitrary, nonzero,
+; to exercise a real lcg-nth-o call rather than the trivial n=0 case).
+;
+; This test does NOT hand-verify the exact swap outcome (pos1/pos2
+; depend on lcg-nth-o(424242, 5, ...) composed through
+; pick-two-distincto, which is more values to hand-trace than is
+; worth doing by hand here) -- instead it verifies STRUCTURAL
+; correctness: pos1 and pos2 are distinct, both are genuinely
+; unmatched positions (not 10 or 11), and new-board is a valid board
+; (still 16 elements, every value still appearing exactly twice,
+; reusing the same shape of check as valid-boardo from
+; test_board_shuffle.rap).
+(defrel (valid-boardo board result)
+  (fresh (len ca cb cc cd ce cf cg ch)
+    (conj
+      (length-o board len)
+      (count-valo board a ca)
+      (count-valo board b cb)
+      (count-valo board c cc)
+      (count-valo board d cd)
+      (count-valo board e ce)
+      (count-valo board f cf)
+      (count-valo board g cg)
+      (count-valo board h ch)
+      (disj
+        (conj
+          (probe (all-checks-passo len ca cb cc cd ce cf cg ch)
+                 true 100 true false)
+          (== result valid))
+        (conj
+          (probe (all-checks-passo len ca cb cc cd ce cf cg ch)
+                 false 100 true false)
+          (== result (invalid len ca cb cc cd ce cf cg ch)))))))
+
+(defrel (all-checks-passo len ca cb cc cd ce cf cg ch)
+  (conj
+    (eqo len 16) (eqo ca 2) (eqo cb 2) (eqo cc 2) (eqo cd 2)
+    (eqo ce 2) (eqo cf 2) (eqo cg 2) (eqo ch 2)))
+
+(defrel (count-valo lst val count)
+  (disj
+    (conj (== lst ()) (== count 0))
+    (fresh (head tail rest-count)
+      (conj
+        (== lst (head . tail))
+        (count-valo tail val rest-count)
+        (disj
+          (conj (probe (== head val) true 100 true false)
+                (addo rest-count 1 count))
+          (conj (probe (== head val) false 100 true false)
+                (== count rest-count)))))))
+
+; positions-not-matchedo: named relation capturing the compound
+; condition, so it can be Probe'd as a single literal call (Probe
+; requires literal syntax at the call site, not a variable -- per the
+; programming guide, Part 2 item 3).
+(defrel (positions-not-matchedo pos1 pos2)
+  (conj (=/= pos1 10) (=/= pos1 11) (=/= pos2 10) (=/= pos2 11)))
+
+; Expected output: pos1/pos2 are distinct, both were genuinely
+; unmatched before the swap (checked by confirming NEITHER is 10 nor
+; 11, the one matched pair), and new-board remains a valid board.
+;   (test1-positions-distinct yes)
+;   (test1-positions-unmatched yes)
+;   (test1-board-still-valid valid)
+(defrel (main args ops)
+  (fresh (board matched counter agenda-entry agenda-term
+          status-id prng-seed unmatched pos1 pos2 unused-next-seed
+          new-board distinct-check unmatched-check
+          board-check ops0 ops1)
+    (conj
+      (== board (a b a f g c e b e h d d c g h f))
+      (== matched ((10 . 11)))
+      (== counter 5)
+      (== agenda-entry
+          (99 (rel (a b r) (call output-statuso a b r))
+              (output-status board matched counter)))
+      (== agenda-term (agenda-entry . ()))
+
+      (find-taggedo agenda-term (output-status board matched counter)
+                    status-id)
+      (lcg-nth-o 4242 counter prng-seed)
+      (unmatched-positionso matched unmatched)
+      (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
+      (swap-positionso board pos1 pos2 new-board)
+
+      (disj
+        (conj (=/= pos1 pos2) (== distinct-check yes))
+        (conj (== pos1 pos2) (== distinct-check no)))
+
+      (disj
+        (conj
+          (probe (positions-not-matchedo pos1 pos2) true 100 true false)
+          (== unmatched-check yes))
+        (conj
+          (probe (positions-not-matchedo pos1 pos2) false 100 true false)
+          (== unmatched-check no)))
+
+      (valid-boardo new-board board-check)
+
+      (cons-ops (output (test1-positions-distinct distinct-check))
+                (no-ops) ops0)
+      (cons-ops (output (test1-positions-unmatched unmatched-check))
+                ops0 ops1)
+      (cons-ops (output (test1-board-still-valid board-check))
+                ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

@@ -1,0 +1,357 @@
+; test_antagonist_readd.rap — full antagonisto isolated test, the
+; should-RE-ADD scenario: antagonist seeded FIRST in the agenda (so
+; it dequeues and runs before any attempt gets a turn, per FIFO --
+; this deliberately sidesteps needing a belief-state entry at all,
+; since the attempts never actually execute before the antagonist's
+; one relevant decision is made and observed), with attempts still
+; present (unexecuted) behind it and plenty of cards unmatched.
+;
+; Scope: confirm the REAL reactive loop, given this seeding, produces
+; two output lines -- the antagonist's own reported decision (yes),
+; and (on a subsequent step, since a new antagonist entry was
+; genuinely added) a SECOND antagonist run's decision -- confirming
+; the re-add genuinely happened, not just that antagonisto claimed it
+; would.
+;
+; An earlier draft of this test tried to call antagonisto directly
+; and inspect its returned ChangeSet's embedded output op without
+; ever applying that ChangeSet -- caught before running: an `output`
+; op only takes effect once its ChangeSet is actually applied by the
+; real reactive loop (the same Stage 2.4 lesson: ChangeSets are not
+; ordinary printable/inspectable data). Fixed by seeding a real
+; agenda via main and letting the real loop run it, the same pattern
+; every other stage's integration test already uses.
+;
+; Dependencies: every piece copied byte-for-byte from its respective
+; verified source file.
+;
+; Run with: ./raprunner test_antagonist_readd.rap < /dev/null
+
+;; --- copied verbatim from test_lcg_nth.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-seqo seed n out-seq final-seed)
+  (disj
+    (conj (eqo n 0) (== out-seq ()) (== final-seed seed))
+    (fresh (n1 next rest)
+      (conj
+        (gto n 0)
+        (subo n 1 n1)
+        (lcg-nexto seed next)
+        (== out-seq (next . rest))
+        (lcg-seqo next n1 rest final-seed)))))
+
+(defrel (lcg-nth-o seed n result)
+  (fresh (discarded-seq)
+    (lcg-seqo seed n discarded-seq result)))
+
+;; --- copied verbatim from test_unmatched_positions.rap ---
+
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+(defrel (range-o lo hi result)
+  (disj
+    (conj (geqo lo hi) (== result ()))
+    (fresh (lo1 rest)
+      (conj
+        (lto lo hi)
+        (addo lo 1 lo1)
+        (range-o lo1 hi rest)
+        (== result (lo . rest))))))
+
+(defrel (unmatched-positionso matched-pairs unmatched)
+  (fresh (all-positions)
+    (conj
+      (range-o 0 16 all-positions)
+      (filter-unmatchedo all-positions matched-pairs unmatched))))
+
+(defrel (filter-unmatchedo positions matched-pairs unmatched)
+  (disj
+    (conj (== positions ()) (== unmatched ()))
+    (fresh (pos rest tail)
+      (conj
+        (== positions (pos . rest))
+        (disj
+          (conj
+            (probe (position-in-pairso matched-pairs pos) true 100 true false)
+            (filter-unmatchedo rest matched-pairs unmatched))
+          (conj
+            (probe (position-in-pairso matched-pairs pos) false 100 true false)
+            (filter-unmatchedo rest matched-pairs tail)
+            (== unmatched (pos . tail))))))))
+
+;; --- copied verbatim from test_pick_two.rap ---
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+(defrel (length-o lst n)
+  (disj
+    (conj (== lst ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== lst (head . tail))
+        (length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (remove-nth-ato lst idx result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result tail))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (remove-nth-ato tail idx1 new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (pick-two-distincto lst seed val1 val2 next-seed)
+  (fresh (len seed1 i remaining len1 j)
+    (conj
+      (length-o lst len)
+      (lcg-rangeo seed len seed1 i)
+      (nth-ato lst i val1)
+      (remove-nth-ato lst i remaining)
+      (length-o remaining len1)
+      (lcg-rangeo seed1 len1 next-seed j)
+      (nth-ato remaining j val2))))
+
+;; --- copied verbatim from test_last_n.rap ---
+
+(defrel (drop-o lst k result)
+  (disj
+    (conj (== k 0) (== result lst))
+    (fresh (head tail k1)
+      (conj
+        (gto k 0)
+        (== lst (head . tail))
+        (subo k 1 k1)
+        (drop-o tail k1 result)))))
+
+(defrel (last-n-o lst n result)
+  (fresh (len skip)
+    (conj
+      (length-o lst len)
+      (subo len n skip)
+      (drop-o lst skip result))))
+
+;; --- copied verbatim from test_tail_check.rap ---
+
+(defrel (entry-tago entry tag)
+  (fresh (id rel-term args rest)
+    (== entry (id rel-term args))
+    (== args (tag . rest))))
+
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+(defrel (tail-has-all-threeo entries)
+  (fresh (e1 e2 e3 t1 t2 t3 tags)
+    (conj
+      (== entries (e1 e2 e3))
+      (entry-tago e1 t1)
+      (entry-tago e2 t2)
+      (entry-tago e3 t3)
+      (== tags (t1 t2 t3))
+      (tag-in-listo tags antagonist)
+      (tag-in-listo tags output-status)
+      (tag-in-listo tags belief-state))))
+
+;; --- copied verbatim from test_readd_conditions.rap ---
+
+(defrel (has-attempts-o agenda)
+  (fresh (entry rest tag)
+    (== agenda (entry . rest))
+    (disj
+      (conj (entry-tago entry tag) (== tag attempt))
+      (has-attempts-o rest))))
+
+(defrel (matched-pairs-length-o matched-pairs n)
+  (disj
+    (conj (== matched-pairs ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== matched-pairs (head . tail))
+        (matched-pairs-length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (unmatched-count-o matched-pairs count)
+  (fresh (num-pairs matched-cards)
+    (conj
+      (matched-pairs-length-o matched-pairs num-pairs)
+      (mulo num-pairs 2 matched-cards)
+      (subo 16 matched-cards count))))
+
+;; --- copied verbatim (with fixed budget) from test_should_readd.rap ---
+
+(defrel (tail-is-handoffo agenda)
+  (fresh (last3)
+    (conj
+      (last-n-o agenda 3 last3)
+      (tail-has-all-threeo last3))))
+
+(defrel (should-readd-o agenda matched-pairs)
+  (fresh (count)
+    (conj
+      (has-attempts-o agenda)
+      (unmatched-count-o matched-pairs count)
+      (geqo count 8)
+      (probe (tail-is-handoffo agenda) false 300 true false))))
+
+;; --- swap-positionso, verified in test_antagonist.rap ---
+
+(defrel (set-nth-ato lst idx new-val result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result (new-val . tail)))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (set-nth-ato tail idx1 new-val new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (swap-positionso board pos1 pos2 new-board)
+  (fresh (val1 val2 mid)
+    (conj
+      (nth-ato board pos1 val1)
+      (nth-ato board pos2 val2)
+      (set-nth-ato board pos1 val2 mid)
+      (set-nth-ato mid pos2 val1 new-board))))
+
+(defrel (find-taggedo agenda contents id)
+  (find-by-contento agenda contents id))
+
+;; --- the complete antagonisto ---
+
+(defrel (readd-decision-reporto agenda matched-pairs decision)
+  (disj
+    (conj
+      (probe (should-readd-o agenda matched-pairs) true 300 true false)
+      (== decision yes))
+    (conj
+      (probe (should-readd-o agenda matched-pairs) false 300 true false)
+      (== decision no))))
+
+(defrel (antagonisto agenda args ops)
+  (fresh (status-id board matched counter
+          prng-seed unmatched pos1 pos2 unused-next-seed
+          new-board decision
+          ops0 ops1 ops2)
+    (conj
+      (find-taggedo agenda (output-status board matched counter) status-id)
+      (lcg-nth-o 4242 counter prng-seed)
+      (unmatched-positionso matched unmatched)
+      (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
+      (swap-positionso board pos1 pos2 new-board)
+      (readd-decision-reporto agenda matched decision)
+      (cons-ops (output (antagonist-decision decision)) (no-ops) ops0)
+      (cons-ops (remove status-id) ops0 ops1)
+      (disj
+        (conj
+          (== decision yes)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status new-board matched counter))
+            ops1 ops2)
+          (cons-ops
+            (add (rel (a b r) (call antagonisto a b r)) (antagonist))
+            ops2 ops))
+        (conj
+          (== decision no)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status new-board matched counter))
+            ops1 ops))))))
+
+;; --- placeholder attempto, this test only. The real attempto
+;;     (Stage 2.6/3) is not needed here since this test's attempts
+;;     are deliberately never dequeued (the antagonist is seeded
+;;     first, per FIFO) -- but rather than leave `attempto`
+;;     UNDEFINED and risk an untested assumption about whether an
+;;     unresolved relation name inside a never-yet-invoked rel
+;;     closure causes a parse-time failure (unverified, and this
+;;     project has been surprised by exactly this kind of
+;;     resolve-time question before), a trivial stub is defined so
+;;     the file is unambiguously well-formed regardless of the
+;;     answer. ---
+(defrel (attempto agenda args ops)
+  (call no-ops ops))
+
+;; --- placeholder output-statuso, this test only (never actually
+;;     dequeued in this scenario, since the antagonist re-adds
+;;     itself and there are still attempts present -- output-status
+;;     would only run once the agenda drains completely, which this
+;;     focused test does not attempt to drive to full completion) ---
+(defrel (output-statuso agenda args ops)
+  (call no-ops ops))
+
+; main: seed the antagonist FIRST (so FIFO guarantees it dequeues and
+; runs before either attempt gets a turn), then two attempt entries
+; (present but never executed in this test -- their mere presence is
+; what has-attempts-o checks), then output-status with only 2 pairs
+; matched (4 cards matched, 12 unmatched -- comfortably over the
+; >= 8 threshold).
+;
+; Expected: the reactive loop runs the antagonist (dequeued first),
+; which reports (antagonist-decision yes) and re-adds itself. The
+; re-added antagonist entry lands at the END of the queue (behind
+; the two still-untouched attempts), so on the NEXT antagonist turn
+; (after both attempts have had their turn and, since no belief-state
+; entry exists, silently failed to produce any ChangeSet -- ordinary
+; relational failure, not a crash), a SECOND (antagonist-decision ...)
+; line should appear, confirming the re-add genuinely happened.
+;
+; Expected output (at least the first line; a second
+; antagonist-decision line confirms the re-add took effect for real):
+;   (antagonist-decision yes)
+;   (antagonist-decision ...)
+(defrel (main args ops)
+  (fresh (board matched ops0 ops1 ops2)
+    (conj
+      (== board (a b a f g c e b e h d d c g h f))
+      (== matched ((10 . 11)) )
+      (cons-ops
+        (add (rel (a b r) (call antagonisto a b r)) (antagonist))
+        (no-ops) ops0)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 0 1))
+                ops0 ops1)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 2 3))
+                ops1 ops2)
+      (cons-ops
+        (add (rel (a b r) (call output-statuso a b r))
+             (output-status board matched 3))
+        ops2 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

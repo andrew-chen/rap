@@ -1,0 +1,83 @@
+; test_tail_check.rap — isolated test of entry-tago and
+; tail-has-all-threeo: extracting an agenda entry's tag (the head
+; symbol of its args field) and checking whether three given entries
+; collectively carry the three required tags (antagonist,
+; output-status, belief-state), in any order.
+;
+; Scope: verify this alone, against hand-built entry lists (NOT a
+; real agenda -- just lists shaped like agenda entries, per
+; find-by-contento's own documented (id rel-term args) shape), before
+; using it inside the antagonist relation (Stage 3).
+;
+; Run with: ./raprunner test_tail_check.rap < /dev/null
+
+; entry-tago: given one agenda entry (id rel-term args), extract the
+; tag -- the head symbol of its args field. Works uniformly whether
+; args has more fields after the tag (e.g. (output-status board
+; matched counter)) or is just the tag alone (e.g. (antagonist)).
+(defrel (entry-tago entry tag)
+  (fresh (id rel-term args rest)
+    (== entry (id rel-term args))
+    (== args (tag . rest))))
+
+; tag-in-listo: succeeds iff tag appears anywhere in tags (a flat list
+; of tag symbols). Pure membership check, same spirit as
+; position-in-pairso.
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+; tail-has-all-threeo: given exactly 3 agenda entries (as a list),
+; succeeds iff their tags collectively include antagonist,
+; output-status, AND belief-state (order and which entry has which
+; tag do not matter -- per the earlier design confirmation that "all
+; three tags appear among the three" and "one each" are the same
+; requirement given exactly 3 slots and 3 required distinct tags).
+(defrel (tail-has-all-threeo entries)
+  (fresh (e1 e2 e3 t1 t2 t3 tags)
+    (conj
+      (== entries (e1 e2 e3))
+      (entry-tago e1 t1)
+      (entry-tago e2 t2)
+      (entry-tago e3 t3)
+      (== tags (t1 t2 t3))
+      (tag-in-listo tags antagonist)
+      (tag-in-listo tags output-status)
+      (tag-in-listo tags belief-state))))
+
+;; --- test cases ---
+
+; TEST 1 -- the three required tags present, in some arbitrary order,
+; with realistic-looking payloads (extra fields after the tag).
+; Should SUCCEED.
+;
+; TEST 2 -- only 2 of the 3 required tags present (missing
+; belief-state, an ordinary attempt entry tagged nothing -- actually,
+; attempt entries have NO tag at all, their args are just a bare
+; (pos1 . pos2) pair, so entry-tago would extract pos1 itself as the
+; "tag", which is neither of the three required symbols). Should FAIL
+; (case deliberately not included in main's conjunction, same
+; convention as test_last_n.rap's Test 3, to avoid making the whole
+; query fail).
+;
+; Expected output:
+;   (test1-all-three-present yes)
+(defrel (main args ops)
+  (fresh (entries1 result1 ops0)
+    (conj
+      (== entries1
+          ((5 (rel (a b r) (call output-statuso a b r))
+              (output-status (a b c) () 3))
+           (6 (rel (a b r) (call antagonisto a b r)) (antagonist))
+           (7 (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+              (belief-state ((0 . unknown))))))
+      (tail-has-all-threeo entries1)
+      (== result1 yes)
+      (cons-ops (output (test1-all-three-present result1)) (no-ops) ops0)
+      (== ops ops0))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

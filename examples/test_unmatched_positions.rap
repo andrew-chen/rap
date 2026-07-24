@@ -1,0 +1,83 @@
+; test_unmatched_positions.rap — isolated test of
+; unmatched-positionso: given matched-pairs, produce the flat list of
+; positions 0-15 NOT appearing in any pair in matched-pairs.
+;
+; Scope: verify this alone, against hand-built matched-pairs inputs,
+; before using it inside the antagonist relation (Stage 3).
+;
+; Run with: ./raprunner test_unmatched_positions.rap < /dev/null
+
+; position-in-pairso: succeeds iff pos appears as either element of
+; some pair in matched-pairs.
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+; range-o: generate the flat list of integers from lo (inclusive) to
+; hi (exclusive), in ascending order. General-purpose, not specific
+; to positions -- useful beyond just this file.
+(defrel (range-o lo hi result)
+  (disj
+    (conj (geqo lo hi) (== result ()))
+    (fresh (lo1 rest)
+      (conj
+        (lto lo hi)
+        (addo lo 1 lo1)
+        (range-o lo1 hi rest)
+        (== result (lo . rest))))))
+
+; unmatched-positionso: filter range 0..15 to exclude anything found
+; in matched-pairs. Uses the Probe-based mutual-exclusivity pattern
+; from the start (per the programming guide, Part 2 item 2/8), not
+; discovered as a bug fix after the fact -- position-in-pairso is
+; wrapped in Probe to get an explicit true/false before branching,
+; the same pattern as has-new-pairo/find-new-matches-collecto.
+(defrel (unmatched-positionso matched-pairs unmatched)
+  (fresh (all-positions)
+    (conj
+      (range-o 0 16 all-positions)
+      (filter-unmatchedo all-positions matched-pairs unmatched))))
+
+(defrel (filter-unmatchedo positions matched-pairs unmatched)
+  (disj
+    (conj (== positions ()) (== unmatched ()))
+    (fresh (pos rest tail)
+      (conj
+        (== positions (pos . rest))
+        (disj
+          (conj
+            (probe (position-in-pairso matched-pairs pos) true 100 true false)
+            (filter-unmatchedo rest matched-pairs unmatched))
+          (conj
+            (probe (position-in-pairso matched-pairs pos) false 100 true false)
+            (filter-unmatchedo rest matched-pairs tail)
+            (== unmatched (pos . tail))))))))
+
+;; --- test cases ---
+
+; TEST 1 -- empty matched-pairs: unmatched should be all 16 positions.
+; TEST 2 -- one matched pair (10 . 11): unmatched should be 0-9,12-15
+;   (14 positions, 10 and 11 excluded).
+; TEST 3 -- multiple matched pairs, non-adjacent: (0 . 2) and (5 . 12),
+;   unmatched should exclude exactly 0, 2, 5, 12.
+;
+; Expected output:
+;   (test1-empty (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))
+;   (test2-one-pair (0 1 2 3 4 5 6 7 8 9 12 13 14 15))
+;   (test3-multi-pair (1 3 4 6 7 8 9 10 11 13 14 15))
+(defrel (main args ops)
+  (fresh (result1 result2 result3 ops0 ops1)
+    (conj
+      (unmatched-positionso () result1)
+      (unmatched-positionso ((10 . 11)) result2)
+      (unmatched-positionso ((0 . 2) (5 . 12)) result3)
+      (cons-ops (output (test1-empty result1)) (no-ops) ops0)
+      (cons-ops (output (test2-one-pair result2)) ops0 ops1)
+      (cons-ops (output (test3-multi-pair result3)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

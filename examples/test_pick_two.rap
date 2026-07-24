@@ -1,0 +1,123 @@
+; test_pick_two.rap — isolated test of remove-nth-ato and
+; pick-two-distincto: picking two distinct random elements from a
+; list via the PRNG, needed for the antagonist's position selection.
+;
+; Scope: verify both alone, against hand-computable seeds, before
+; using pick-two-distincto inside the antagonist relation (Stage 3).
+;
+; Dependencies: copies in lcg-nexto, lcg-rangeo, nth-ato from
+; test_shuffle.rap, verbatim. length-o from
+; test_board_shuffle.rap, verbatim.
+;
+; Run with: ./raprunner test_pick_two.rap < /dev/null
+
+;; --- copied verbatim from prng.rap / test_shuffle.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+;; --- copied verbatim from test_board_shuffle.rap ---
+
+(defrel (length-o lst n)
+  (disj
+    (conj (== lst ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== lst (head . tail))
+        (length-o tail n1)
+        (addo n1 1 n)))))
+
+;; --- new for Stage 3 ---
+
+; remove-nth-ato: given a list and an index, produce a new, SHORTER
+; list with the element at that index removed entirely (not blanked
+; or replaced -- an actually shorter list). Distinct from set-nth-ato
+; (Stage 2.6's shuffle support), which keeps the list the same length
+; and only replaces one element's value.
+(defrel (remove-nth-ato lst idx result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result tail))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (remove-nth-ato tail idx1 new-tail)
+          (== result (head . new-tail)))))))
+
+; pick-two-distincto: given a list and a seed, pick two DISTINCT
+; elements from the list at random (by removing the first pick from
+; the candidate pool before picking the second, guaranteeing
+; distinctness by construction rather than by re-rolling on
+; collision), returning both values and the seed advanced for
+; further use.
+(defrel (pick-two-distincto lst seed val1 val2 next-seed)
+  (fresh (len seed1 i remaining len1 j)
+    (conj
+      (length-o lst len)
+      (lcg-rangeo seed len seed1 i)
+      (nth-ato lst i val1)
+      (remove-nth-ato lst i remaining)
+      (length-o remaining len1)
+      (lcg-rangeo seed1 len1 next-seed j)
+      (nth-ato remaining j val2))))
+
+;; --- test cases ---
+
+; TEST 1 -- remove-nth-ato sanity, no randomness. list=(a b c d),
+; remove index 2 (expect (a b d)).
+;
+; TEST 2 -- pick-two-distincto, hand-traced against a small list with
+; a fixed seed. list=(10 11 12 13 14) (5 elements), seed=42.
+;
+; Hand trace:
+;   len=5. lcg-rangeo(42, 5, seed1, i): lcg-nexto(42)=12219,
+;     i = 12219 mod 5 = 4. val1 = nth-ato(lst, 4) = 14.
+;   remaining = remove index 4 from (10 11 12 13 14) = (10 11 12 13)
+;   len1=4. lcg-rangeo(12219, 4, next-seed, j): lcg-nexto(12219)=8456,
+;     j = 8456 mod 4 = 0. val2 = nth-ato(remaining, 0) = 10.
+;   next-seed = 8456
+;
+; Expected output:
+;   (test1-remove-idx2 (a b d))
+;   (test2-val1 14)
+;   (test2-val2 10)
+;   (test2-next-seed 8456)
+(defrel (main args ops)
+  (fresh (lst1 removed
+          lst2 v1 v2 nseed
+          ops0 ops1 ops2 ops3)
+    (conj
+      (== lst1 (a b c d))
+      (remove-nth-ato lst1 2 removed)
+
+      (== lst2 (10 11 12 13 14))
+      (pick-two-distincto lst2 42 v1 v2 nseed)
+
+      (cons-ops (output (test1-remove-idx2 removed)) (no-ops) ops0)
+      (cons-ops (output (test2-val1 v1)) ops0 ops1)
+      (cons-ops (output (test2-val2 v2)) ops1 ops2)
+      (cons-ops (output (test2-next-seed nseed)) ops2 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

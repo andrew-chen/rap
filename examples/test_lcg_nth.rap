@@ -1,0 +1,72 @@
+; test_lcg_nth.rap — isolated test of lcg-nth-o: given a seed and an
+; iteration count n, produce the LCG value after n iterations (the
+; "final-seed" lcg-seqo already computes, without needing the
+; intermediate sequence). This lets any caller derive a fresh
+; pseudorandom value on demand from a fixed, hardcoded initial seed
+; plus a monotonically-increasing counter already being tracked
+; elsewhere (e.g. output-status's touch counter in Stage 3), without
+; needing to thread a live seed value through the agenda itself.
+;
+; Scope: verify lcg-nth-o alone, against hand-computable cases, before
+; using it anywhere in the antagonist relation.
+;
+; Dependencies: copies in lcg-nexto and lcg-seqo from prng.rap,
+; verbatim.
+;
+; Run with: ./raprunner test_lcg_nth.rap < /dev/null
+
+;; --- copied verbatim from prng.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-seqo seed n out-seq final-seed)
+  (disj
+    (conj (eqo n 0) (== out-seq ()) (== final-seed seed))
+    (fresh (n1 next rest)
+      (conj
+        (gto n 0)
+        (subo n 1 n1)
+        (lcg-nexto seed next)
+        (== out-seq (next . rest))
+        (lcg-seqo next n1 rest final-seed)))))
+
+;; --- new for Stage 3 ---
+
+; lcg-nth-o: given a seed and an iteration count n, produce the LCG
+; value after n iterations -- a thin wrapper over lcg-seqo, discarding
+; the intermediate sequence since callers only ever want the final
+; value here.
+(defrel (lcg-nth-o seed n result)
+  (fresh (discarded-seq)
+    (lcg-seqo seed n discarded-seq result)))
+
+;; --- test cases ---
+
+; TEST 1 -- n=0 should just return the seed unchanged (base case).
+; TEST 2 -- n=4 with seed 42 should match prng.rap's own previously-
+; verified sequence: lcg-nexto(42)=12219, lcg-nexto(12219)=8456,
+; lcg-nexto(8456)=52513, lcg-nexto(52513)=18646 -- so lcg-nth-o with
+; n=4 should give 18646 (matches test_shuffle.rap's own hand-traced
+; sequence exactly, a useful cross-check).
+; TEST 3 -- n=1 should just be one lcg-nexto call: lcg-nexto(42)=12219.
+;
+; Expected output:
+;   (test1-n0 42)
+;   (test2-n4 18646)
+;   (test3-n1 12219)
+(defrel (main args ops)
+  (fresh (r1 r2 r3 ops0 ops1)
+    (conj
+      (lcg-nth-o 42 0 r1)
+      (lcg-nth-o 42 4 r2)
+      (lcg-nth-o 42 1 r3)
+      (cons-ops (output (test1-n0 r1)) (no-ops) ops0)
+      (cons-ops (output (test2-n4 r2)) ops0 ops1)
+      (cons-ops (output (test3-n1 r3)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

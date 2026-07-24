@@ -1,0 +1,187 @@
+; test_should_readd.rap — isolated test of should-readd-o: the
+; complete antagonist re-add decision, combining has-attempts-o,
+; unmatched-count-o, and tail-has-all-threeo (via last-n-o). Should
+; re-add iff attempts remain, AND at least half the cards are
+; unmatched, AND the last 3 agenda entries are NOT (antagonist,
+; output-status, belief-state) in some order.
+;
+; Scope: verify the combined decision against scenarios that each
+; isolate ONE of the three stopping conditions, before wiring this
+; into antagonisto itself.
+;
+; Dependencies: copies in entry-tago (test_tail_check.rap),
+; has-attempts-o/matched-pairs-length-o/unmatched-count-o
+; (test_readd_conditions.rap), length-o/drop-o/last-n-o
+; (test_board_shuffle.rap / test_last_n.rap), tag-in-listo/
+; tail-has-all-threeo (test_tail_check.rap) -- all verbatim.
+;
+; Run with: ./raprunner test_should_readd.rap < /dev/null
+
+;; --- copied verbatim from test_tail_check.rap ---
+
+(defrel (entry-tago entry tag)
+  (fresh (id rel-term args rest)
+    (== entry (id rel-term args))
+    (== args (tag . rest))))
+
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+(defrel (tail-has-all-threeo entries)
+  (fresh (e1 e2 e3 t1 t2 t3 tags)
+    (conj
+      (== entries (e1 e2 e3))
+      (entry-tago e1 t1)
+      (entry-tago e2 t2)
+      (entry-tago e3 t3)
+      (== tags (t1 t2 t3))
+      (tag-in-listo tags antagonist)
+      (tag-in-listo tags output-status)
+      (tag-in-listo tags belief-state))))
+
+;; --- copied verbatim from test_readd_conditions.rap ---
+
+(defrel (has-attempts-o agenda)
+  (fresh (entry rest tag)
+    (== agenda (entry . rest))
+    (disj
+      (conj (entry-tago entry tag) (== tag attempt))
+      (has-attempts-o rest))))
+
+(defrel (matched-pairs-length-o matched-pairs n)
+  (disj
+    (conj (== matched-pairs ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== matched-pairs (head . tail))
+        (matched-pairs-length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (unmatched-count-o matched-pairs count)
+  (fresh (num-pairs matched-cards)
+    (conj
+      (matched-pairs-length-o matched-pairs num-pairs)
+      (mulo num-pairs 2 matched-cards)
+      (subo 16 matched-cards count))))
+
+;; --- copied verbatim from test_board_shuffle.rap / test_last_n.rap ---
+
+(defrel (length-o lst n)
+  (disj
+    (conj (== lst ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== lst (head . tail))
+        (length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (drop-o lst k result)
+  (disj
+    (conj (== k 0) (== result lst))
+    (fresh (head tail k1)
+      (conj
+        (gto k 0)
+        (== lst (head . tail))
+        (subo k 1 k1)
+        (drop-o tail k1 result)))))
+
+(defrel (last-n-o lst n result)
+  (fresh (len skip)
+    (conj
+      (length-o lst len)
+      (subo len n skip)
+      (drop-o lst skip result))))
+
+;; --- new: the combined decision ---
+
+; tail-is-handoffo: succeeds iff the agenda's last 3 entries are
+; (antagonist, output-status, belief-state) in some order -- a later
+; antagonist has already taken over the re-adding duty. Wraps
+; last-n-o + tail-has-all-threeo; separated as its own relation so it
+; can be Probe'd as a single unit (Probe requires literal syntax at
+; the call site, not a variable -- programming guide Part 2 item 3).
+(defrel (tail-is-handoffo agenda)
+  (fresh (last3)
+    (conj
+      (last-n-o agenda 3 last3)
+      (tail-has-all-threeo last3))))
+
+; should-readd-o: the complete re-add decision. Succeeds iff the
+; antagonist SHOULD re-add itself: attempts remain, AND at least half
+; the 16 cards are unmatched (count >= 8), AND the tail is NOT a
+; handoff to a later antagonist. Uses Probe on tail-is-handoffo to
+; get a genuinely exclusive true/false (last-n-o can also simply FAIL
+; if the agenda has fewer than 3 entries -- per that relation's own
+; documented fail-closed behavior -- and Probe's `false` condition
+; correctly covers both "found 3 entries but they aren't a handoff"
+; and "couldn't even check" as equally "not a handoff," which is the
+; safe default per last-n-o's own design intent).
+;
+; PROBE BUDGET: 300, not 100. An earlier draft used 100 (copied
+; without reconsidering it from elsewhere) and the Probe returned
+; `bounded` (ran out of budget, indeterminate) rather than a clean
+; `true`/`false` -- caught via --trace's new Probe-outcome visibility
+; showing exactly this (`[probe] got=bounded want=false`), the same
+; underlying bug class already documented in the programming guide
+; (Part 2, item 8: Probe budgets sized for small isolated inputs can
+; be insufficient once real composed logic runs -- tail-is-handoffo
+; nests last-n-o plus three entry-tago calls plus three tag-in-listo
+; list-walks). Raised to 300 following the same precedent set for
+; find-new-matches-collecto in Stage 2.6, rather than hunting for the
+; exact minimum sufficient value.
+(defrel (should-readd-o agenda matched-pairs)
+  (fresh (count)
+    (conj
+      (has-attempts-o agenda)
+      (unmatched-count-o matched-pairs count)
+      (geqo count 8)
+      (probe (tail-is-handoffo agenda) false 300 true false))))
+
+;; --- test cases, each isolating ONE stopping condition ---
+
+; TEST 1 -- should re-add: attempts present, plenty unmatched (12),
+; tail is NOT a handoff (ordinary attempt entries at the end).
+; Expected: SUCCEEDS.
+;
+; TEST 2 -- should NOT re-add: no attempts remain (agenda has only
+; belief-state/output-status/antagonist tags). Expected: FAILS
+; (deliberately not in main's conjunction, per the established
+; convention).
+;
+; TEST 3 -- should NOT re-add: fewer than half unmatched (5 pairs
+; matched = 10 cards = only 6 unmatched, < 8). Expected: FAILS
+; (deliberately not in main's conjunction).
+;
+; TEST 4 -- should NOT re-add: tail IS a handoff (last 3 entries are
+; exactly antagonist/output-status/belief-state). Expected: FAILS
+; (deliberately not in main's conjunction).
+;
+; Only Test 1 is exercised in main below, since it's the only case
+; expected to succeed; Tests 2-4 were each reasoned through and are
+; documented here as the design intent, following the same
+; "absence of output confirms correct failure" convention already
+; established (test_last_n.rap Test 3, test_readd_conditions.rap
+; Test 2) rather than risking main's own query failing outright by
+; including a goal expected to fail in its conjunction.
+;
+; Expected output:
+;   (test1-should-readd yes)
+(defrel (main args ops)
+  (fresh (agenda1 matched1 result1 ops0)
+    (conj
+      (== agenda1
+          ((5 (rel (a b r) (call attempto a b r)) (attempt 0 1))
+           (6 (rel (a b r) (call attempto a b r)) (attempt 2 3))
+           (7 (rel (a b r) (call antagonisto a b r)) (antagonist))))
+      (== matched1 ((0 . 1) (2 . 3) (4 . 5) (6 . 7)))
+      (should-readd-o agenda1 matched1)
+      (== result1 yes)
+      (cons-ops (output (test1-should-readd result1)) (no-ops) ops0)
+      (== ops ops0))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

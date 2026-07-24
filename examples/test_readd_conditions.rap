@@ -1,0 +1,90 @@
+; test_readd_conditions.rap — isolated test of has-attempts-o and
+; unmatched-count-o, the two conditions (beyond the already-verified
+; tail-check) needed for the antagonist's re-add decision: don't
+; re-add if no attempts remain, or if fewer than half the cards are
+; unmatched.
+;
+; Scope: verify both alone, against hand-built agenda/matched-pairs
+; inputs, before assembling the full re-add decision.
+;
+; Run with: ./raprunner test_readd_conditions.rap < /dev/null
+
+; entry-tago: given one agenda entry (id rel-term args), extract the
+; tag -- the head symbol of its args field. Copied verbatim from
+; test_tail_check.rap (already independently verified there).
+(defrel (entry-tago entry tag)
+  (fresh (id rel-term args rest)
+    (== entry (id rel-term args))
+    (== args (tag . rest))))
+
+; has-attempts-o: succeeds iff at least one entry in the agenda has
+; the tag `attempt`. Uses entry-tago per-entry, same membership-style
+; recursion as tag-in-listo/position-in-pairso.
+(defrel (has-attempts-o agenda)
+  (fresh (entry rest tag)
+    (== agenda (entry . rest))
+    (disj
+      (conj (entry-tago entry tag) (== tag attempt))
+      (has-attempts-o rest))))
+
+; unmatched-count-o: given matched-pairs, compute how many of the 16
+; cards remain unmatched (16 - 2 * number of matched pairs).
+(defrel (matched-pairs-length-o matched-pairs n)
+  (disj
+    (conj (== matched-pairs ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== matched-pairs (head . tail))
+        (matched-pairs-length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (unmatched-count-o matched-pairs count)
+  (fresh (num-pairs matched-cards)
+    (conj
+      (matched-pairs-length-o matched-pairs num-pairs)
+      (mulo num-pairs 2 matched-cards)
+      (subo 16 matched-cards count))))
+
+;; --- test cases ---
+
+; TEST 1 -- has-attempts-o: agenda with a mix of tagged entries,
+; ONE of which is an attempt (among belief-state/output-status/
+; antagonist). Should SUCCEED.
+;
+; TEST 2 -- has-attempts-o: agenda with NO attempt entries at all
+; (only belief-state/output-status/antagonist). Should FAIL --
+; deliberately not included in main's conjunction (same convention
+; as test_last_n.rap's Test 3), so its absence from output is itself
+; the confirmation.
+;
+; TEST 3 -- unmatched-count-o: matched-pairs with 3 pairs matched
+; (6 cards matched), expect count = 10 (still >= 8, i.e. still at
+; least half unmatched).
+;
+; TEST 4 -- unmatched-count-o: matched-pairs with 5 pairs matched
+; (10 cards matched), expect count = 6 (< 8, i.e. fewer than half
+; unmatched -- this is the threshold case that should suppress
+; antagonist re-adding).
+;
+; Expected output:
+;   (test1-has-attempts yes)
+;   (test3-unmatched-count 10)
+;   (test4-unmatched-count 6)
+(defrel (main args ops)
+  (fresh (agenda1 result1 count3 count4 ops0 ops1 ops2)
+    (conj
+      (== agenda1
+          ((5 (rel (a b r) (call output-statuso a b r))
+              (output-status (a b c) () 3))
+           (6 (rel (a b r) (call antagonisto a b r)) (antagonist))
+           (7 (rel (a b r) (call attempto a b r)) (attempt 0 1))))
+      (has-attempts-o agenda1)
+      (== result1 yes)
+      (unmatched-count-o ((0 . 1) (2 . 3) (4 . 5)) count3)
+      (unmatched-count-o ((0 . 1) (2 . 3) (4 . 5) (6 . 7) (8 . 9)) count4)
+      (cons-ops (output (test1-has-attempts result1)) (no-ops) ops0)
+      (cons-ops (output (test3-unmatched-count count3)) ops0 ops1)
+      (cons-ops (output (test4-unmatched-count count4)) ops1 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
