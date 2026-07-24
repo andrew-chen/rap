@@ -266,7 +266,7 @@
 (defrel (antagonisto agenda args ops)
   (fresh (status-id board matched counter
           prng-seed unmatched pos1 pos2 unused-next-seed
-          new-board decision
+          new-board decision counter1
           ops0 ops1 ops2)
     (conj
       (find-taggedo agenda (output-status board matched counter) status-id)
@@ -275,23 +275,28 @@
       (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
       (swap-positionso board pos1 pos2 new-board)
       (readd-decision-reporto agenda matched decision)
+      (addo counter 1 counter1)
       (cons-ops (output (antagonist-decision decision)) (no-ops) ops0)
       (cons-ops (remove status-id) ops0 ops1)
       (disj
         (conj
           (== decision yes)
-          (cons-ops
-            (add (rel (a b r) (call output-statuso a b r))
-                 (output-status new-board matched counter))
-            ops1 ops2)
+          ; antagonist added BEFORE output-status so it sits ahead of
+          ; output-status in the FIFO queue; output-status must still
+          ; be in the agenda when the re-added antagonist dequeues and
+          ; calls find-taggedo
           (cons-ops
             (add (rel (a b r) (call antagonisto a b r)) (antagonist))
+            ops1 ops2)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status new-board matched counter1))
             ops2 ops))
         (conj
           (== decision no)
           (cons-ops
             (add (rel (a b r) (call output-statuso a b r))
-                 (output-status new-board matched counter))
+                 (output-status new-board matched counter1))
             ops1 ops))))))
 
 ;; --- placeholder attempto, this test only. The real attempto
@@ -332,10 +337,14 @@
 ; relational failure, not a crash), a SECOND (antagonist-decision ...)
 ; line should appear, confirming the re-add genuinely happened.
 ;
-; Expected output (at least the first line; a second
-; antagonist-decision line confirms the re-add took effect for real):
+; Expected output:
 ;   (antagonist-decision yes)
-;   (antagonist-decision ...)
+;   (antagonist-decision no)
+;
+; The second line is `no` because the two stub attempt entries (id=2,
+; id=3) drain between the two antagonist turns -- by the time the
+; re-added antagonist dequeues, no attempt entries remain in the
+; agenda, so has-attempts-o returns false and should-readd-o fails.
 (defrel (main args ops)
   (fresh (board matched ops0 ops1 ops2)
     (conj
