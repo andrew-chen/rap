@@ -441,13 +441,60 @@
       (last-n-o agenda 3 last3)
       (tail-has-all-threeo last3))))
 
+; agenda-is-just-belief-and-statuso: succeeds iff the agenda contains
+; EXACTLY 2 entries, tagged belief-state and output-status (in either
+; order), and nothing else. Mirrors tail-has-all-threeo's own style,
+; just for 2 required tags instead of 3.
+;
+; WHY THIS IS NEEDED: a real design gap found via a genuine Stage 3
+; run (memory_stage3_0.rap's own first end-to-end test). Once every
+; initial attempt and every initial antagonist (except one re-added
+; instance) has drained, the agenda can legitimately be reduced to
+; JUST belief-state and output-status, with the one re-added
+; antagonist ALSO still pending -- but by the time THAT antagonist
+; gets its own turn, belief-state has not yet run (it hasn't produced
+; any new attempts yet), so has-attempts-o correctly fails (there
+; genuinely are no attempt-tagged entries left) and the ORIGINAL
+; should-readd-o condition declines to re-add. This is wrong: belief-
+; state is ABOUT to run and add a fresh wave of attempts once it gets
+; its own turn, and the antagonist needs to survive long enough to
+; act on that next wave, not go extinct just because no attempts
+; happen to exist in this exact narrow window.
+(defrel (agenda-is-just-belief-and-statuso agenda)
+  (fresh (e1 e2 t1 t2 tags len)
+    (conj
+      (length-o agenda len)
+      (eqo len 2)
+      (== agenda (e1 e2))
+      (entry-tago e1 t1)
+      (entry-tago e2 t2)
+      (== tags (t1 t2))
+      (tag-in-listo tags belief-state)
+      (tag-in-listo tags output-status))))
+
+; should-readd-o: the antagonist should re-add itself if EITHER:
+; (a) the original condition (attempts remain, plenty unmatched, no
+;     later antagonist has already taken over), OR
+; (b) the agenda has been reduced to just belief-state and
+;     output-status (no attempts exist right now, but belief-state
+;     is about to add a fresh wave) AND plenty of cards remain
+;     unmatched.
+; This is an ordinary logical OR over two conditions that each gate
+; the SAME predicate's success/failure -- not a case of branching to
+; produce two different values for a shared output variable, so a
+; plain disj (not a Probe-guarded one) is the correct, safe choice
+; here (see the programming guide, Part 2 item 2, for when Probe-
+; guarding is actually required and when it isn't).
 (defrel (should-readd-o agenda matched-pairs)
   (fresh (count)
     (conj
-      (has-attempts-o agenda)
       (unmatched-count-o matched-pairs count)
       (geqo count 8)
-      (probe (tail-is-handoffo agenda) false 1000 true false))))
+      (disj
+        (conj
+          (has-attempts-o agenda)
+          (probe (tail-is-handoffo agenda) false 1000 true false))
+        (agenda-is-just-belief-and-statuso agenda)))))
 
 ;; --- swap-positionso, verified in test_antagonist.rap ---
 
