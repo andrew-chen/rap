@@ -1,0 +1,425 @@
+; memory_stage2_6_oddfix.rap — Stage 2.6 game, with
+; find-new-matches-collecto (and its notin-pairso/has-new-pairo
+; dependencies) REPLACED by new-find-matches-o, the from-scratch,
+; odd-count-safe rewrite built and independently verified across
+; this project's most recent stretch of work (oddo/eveno, mapo/
+; filtero, group-pairso, distinct-valueso, process-one-valueo,
+; process-all-valueso -- see test_new_find_matches.rap for the final
+; integration test of this exact replacement).
+;
+; PURPOSE OF THIS FILE: verify the new logic is INERT-BUT-PRESENT
+; against the known-working, non-adversarial Stage 2.6 game -- this
+; board never produces an odd-count value (every value appears
+; exactly twice, since there is no antagonist here to create
+; staleness), so new-find-matches-o's odd-count-specific machinery
+; should never actually be exercised. This file's whole purpose is to
+; confirm swapping in the replacement does not change the game's
+; observable behavior AT ALL relative to memory_stage2_6.rap --
+; same board seed, same attempt pairing, same expected final matched
+; pairs -- before ever combining this with the antagonist (Stage 3),
+; where the odd-count path will actually matter for real.
+;
+; Named distinctly from memory_stage2_6.rap (rather than overwriting
+; it) specifically so the two files can be diffed directly against
+; each other later, per explicit request, without needing to hunt
+; through version history.
+;
+; Everything below is IDENTICAL to memory_stage2_6.rap except:
+;   - notin-pairso, has-new-pairo, find-new-matches-collecto are
+;     REMOVED (replaced by the new-find-matches-o dependency chain)
+;   - oddo, eveno, mapo, filtero, group-pairso, distinct-valueso
+;     (and its own already-seeno/tag-in-listo dependencies),
+;     positions-with-valueo, not-matchedo, exclude-matchedo,
+;     process-one-valueo, process-all-valueso, new-find-matches-o
+;     are ADDED (copied byte-for-byte from their respective verified
+;     test files)
+;   - enqueue-flip-known-matcheso's one call site is updated from
+;     find-new-matches-collecto to new-find-matches-o
+;
+; Run with: ./raprunner memory_stage2_6_oddfix.rap < /dev/null
+
+;; --- copied verbatim from memory_stage2_0.rap ---
+
+(defrel (belief-ato belief pos status)
+  (fresh (rest p s)
+    (== belief ((p . s) . rest))
+    (disj
+      (conj (== p pos) (== s status))
+      (belief-ato rest pos status))))
+
+(defrel (all-unknowno n belief)
+  (all-unknowno-acc 0 n belief))
+
+(defrel (all-unknowno-acc i n belief)
+  (disj
+    (conj (eqo i n) (== belief ()))
+    (fresh (i1 rest)
+      (conj
+        (gto n i)
+        (addo i 1 i1)
+        (== belief ((i . unknown) . rest))
+        (all-unknowno-acc i1 n rest)))))
+
+;; --- copied verbatim from memory_stage2_1.rap ---
+;; NOTE: only reveal-ato-acc is used below, called directly with an
+;; already-known value from board-ato -- the reveal-ato wrapper is
+;; not needed here (see Stage 2.6's own note on this).
+
+(defrel (reveal-ato-acc belief pos true-val new-belief)
+  (disj
+    (conj (== belief ()) (== new-belief ()))
+    (fresh (p s rest new-rest)
+      (conj
+        (== belief ((p . s) . rest))
+        (disj
+          (conj
+            (== p pos)
+            (== new-belief ((p . true-val) . new-rest))
+            (== new-rest rest))
+          (conj
+            (=/= p pos)
+            (== new-belief ((p . s) . new-rest))
+            (reveal-ato-acc rest pos true-val new-rest)))))))
+
+;; --- NEW: replacement for find-new-matches-collecto, copied
+;;     byte-for-byte from test_new_find_matches.rap (already
+;;     independently verified there, including the odd-count case
+;;     find-new-matches-collecto could not handle correctly) ---
+
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+(defrel (already-seeno values-so-far val result)
+  (disj
+    (conj
+      (probe (tag-in-listo values-so-far val) true 100 true false)
+      (== result yes))
+    (conj
+      (probe (tag-in-listo values-so-far val) false 100 true false)
+      (== result no))))
+
+(defrel (distinct-valueso belief values)
+  (distinct-valueso-acc belief () values))
+
+(defrel (distinct-valueso-acc belief values-so-far values)
+  (disj
+    (conj (== belief ()) (== values values-so-far))
+    (fresh (pos status rest seen-check)
+      (conj
+        (== belief ((pos . status) . rest))
+        (disj
+          (conj
+            (== status unknown)
+            (distinct-valueso-acc rest values-so-far values))
+          (fresh (new-so-far)
+            (conj
+              (=/= status unknown)
+              (already-seeno values-so-far status seen-check)
+              (disj
+                (conj (== seen-check yes) (== new-so-far values-so-far))
+                (conj
+                  (== seen-check no)
+                  (== new-so-far (status . values-so-far))))
+              (distinct-valueso-acc rest new-so-far values))))))))
+
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+(defrel (group-pairso lst pairs leftover)
+  (disj
+    (conj (== lst ()) (== pairs ()) (== leftover ()))
+    (conj (fresh (x) (== lst (x . ()))) (== pairs ()) (== leftover lst))
+    (fresh (a b rest pairs-rest)
+      (conj
+        (== lst (a . (b . rest)))
+        (group-pairso rest pairs-rest leftover)
+        (== pairs ((a . b) . pairs-rest))))))
+
+(defrel (positions-with-valueo belief value positions)
+  (disj
+    (conj (== belief ()) (== positions ()))
+    (fresh (pos status rest tail)
+      (conj
+        (== belief ((pos . status) . rest))
+        (disj
+          (conj (== status value)
+                (positions-with-valueo rest value tail)
+                (== positions (pos . tail)))
+          (conj (=/= status value)
+                (positions-with-valueo rest value positions)))))))
+
+(defrel (not-matchedo matched-pairs pos result)
+  (disj
+    (conj
+      (probe (position-in-pairso matched-pairs pos) true 100 true false)
+      (== result no))
+    (conj
+      (probe (position-in-pairso matched-pairs pos) false 100 true false)
+      (== result yes))))
+
+(defrel (exclude-matchedo positions matched-pairs result)
+  (disj
+    (conj (== positions ()) (== result ()))
+    (fresh (pos rest keep tail)
+      (conj
+        (== positions (pos . rest))
+        (not-matchedo matched-pairs pos keep)
+        (disj
+          (conj (== keep yes) (== result (pos . tail)))
+          (conj (== keep no) (== result tail)))
+        (exclude-matchedo rest matched-pairs tail)))))
+
+(defrel (process-one-valueo belief value matched-pairs pairs leftover)
+  (fresh (positions filtered)
+    (conj
+      (positions-with-valueo belief value positions)
+      (exclude-matchedo positions matched-pairs filtered)
+      (group-pairso filtered pairs leftover))))
+
+(defrel (process-all-valueso belief values matched-pairs
+                              pairs-so-far leftovers-so-far
+                              final-pairs final-leftovers)
+  (disj
+    (conj
+      (== values ())
+      (== final-pairs pairs-so-far)
+      (== final-leftovers leftovers-so-far))
+    (fresh (v rest pairs-v leftover-v new-pairs-so-far new-leftovers-so-far)
+      (conj
+        (== values (v . rest))
+        (process-one-valueo belief v matched-pairs pairs-v leftover-v)
+        (appendo pairs-so-far pairs-v new-pairs-so-far)
+        (appendo leftovers-so-far leftover-v new-leftovers-so-far)
+        (process-all-valueso belief rest matched-pairs
+                              new-pairs-so-far new-leftovers-so-far
+                              final-pairs final-leftovers)))))
+
+; new-find-matches-o: the complete replacement for
+; find-new-matches-collecto. SAME output contract (belief,
+; matched-pairs -> result-pairs) as the old relation, so
+; enqueue-flip-known-matcheso's own call site only needs its callee's
+; NAME updated, not its calling convention.
+(defrel (new-find-matches-o belief matched-pairs result-pairs)
+  (fresh (values all-pairs all-leftovers cross-pairs discarded-leftover)
+    (conj
+      (distinct-valueso belief values)
+      (process-all-valueso belief values matched-pairs () ()
+                            all-pairs all-leftovers)
+      (group-pairso all-leftovers cross-pairs discarded-leftover)
+      (appendo all-pairs cross-pairs result-pairs))))
+
+;; --- copied byte-for-byte, verified, from test_shuffle.rap /
+;;     test_board_shuffle.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+(defrel (set-nth-ato lst idx new-val result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result (new-val . tail)))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (set-nth-ato tail idx1 new-val new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (swap-nth lst idx1 idx2 result)
+  (fresh (val1 val2 mid)
+    (conj
+      (nth-ato lst idx1 val1)
+      (nth-ato lst idx2 val2)
+      (set-nth-ato lst idx1 val2 mid)
+      (set-nth-ato mid idx2 val1 result))))
+
+(defrel (shuffleo lst seed i result final-seed)
+  (disj
+    (conj (eqo i 0) (== result lst) (== final-seed seed))
+    (fresh (i1 bound next j swapped)
+      (conj
+        (gto i 0)
+        (subo i 1 i1)
+        (addo i 1 bound)
+        (lcg-rangeo seed bound next j)
+        (swap-nth lst i j swapped)
+        (shuffleo swapped next i1 result final-seed)))))
+
+;; --- new for Stage 2.5 (unchanged from that stage) ---
+
+(defrel (find-taggedo agenda contents id)
+  (find-by-contento agenda contents id))
+
+; board-ato: given a shuffled board (a flat list of 16 values) and a
+; position, look up the value there by list index.
+(defrel (board-ato board pos val)
+  (nth-ato board pos val))
+
+; attempto: one-shot. args is the TAGGED term (attempt pos1 pos2).
+(defrel (attempto agenda args ops)
+  (fresh (pos1 pos2 board
+          belief-id old-belief belief1 new-belief
+          status-id old-matched old-counter new-counter
+          val1 val2 outcome
+          ops0 ops1 ops2 ops3)
+    (conj
+      (== args (attempt pos1 pos2))
+      (find-taggedo agenda (belief-state old-belief) belief-id)
+      (find-taggedo agenda (output-status board old-matched old-counter)
+                    status-id)
+      (board-ato board pos1 val1)
+      (board-ato board pos2 val2)
+      (reveal-ato-acc old-belief pos1 val1 belief1)
+      (reveal-ato-acc belief1 pos2 val2 new-belief)
+      (disj
+        (conj (== val1 val2) (== outcome match))
+        (conj (=/= val1 val2) (== outcome no-match)))
+      (cons-ops
+        (output (attempt-result outcome (pos1 val1) (pos2 val2)))
+        (no-ops) ops0)
+      (cons-ops (remove belief-id) ops0 ops1)
+      (cons-ops
+        (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+             (belief-state new-belief))
+        ops1 ops2)
+      (addo old-counter 1 new-counter)
+      (cons-ops (remove status-id) ops2 ops3)
+      (disj
+        (conj
+          (== outcome match)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status board ((pos1 . pos2) . old-matched)
+                                new-counter))
+            ops3 ops))
+        (conj
+          (== outcome no-match)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status board old-matched new-counter))
+            ops3 ops))))))
+
+; pairs->add-attempts-opso: fold a list of newly-discovered pairs into
+; a ChangeSet of add operations, one attempto entry per pair.
+(defrel (pairs->add-attempts-opso pairs ops)
+  (disj
+    (conj (== pairs ()) (no-ops ops))
+    (fresh (pair rest ops-tail pos1 pos2)
+      (conj
+        (== pairs (pair . rest))
+        (== pair (pos1 . pos2))
+        (pairs->add-attempts-opso rest ops-tail)
+        (cons-ops
+          (add (rel (a b r) (call attempto a b r)) (attempt pos1 pos2))
+          ops-tail ops)))))
+
+; enqueue-flip-known-matcheso: args arrives as the TAGGED term
+; (belief-state alist). ONLY CHANGE from memory_stage2_6.rap's own
+; version: calls new-find-matches-o instead of
+; find-new-matches-collecto -- same calling convention, different
+; callee.
+(defrel (enqueue-flip-known-matcheso agenda args ops)
+  (fresh (belief status-id board matched counter new-pairs
+          attempt-ops ops0 ops1 ops2)
+    (conj
+      (== args (belief-state belief))
+      (find-taggedo agenda (output-status board matched counter) status-id)
+      (new-find-matches-o belief matched new-pairs)
+      (disj
+        (conj
+          (== new-pairs ())
+          (no-ops ops))
+        (fresh (dummy)
+          (conj
+            (=/= new-pairs ())
+            (pairs->add-attempts-opso new-pairs attempt-ops)
+            (== ops0 attempt-ops)
+            (cons-ops
+              (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+                   (belief-state belief))
+              ops0 ops1)
+            (cons-ops (remove status-id) ops1 ops2)
+            (cons-ops
+              (add (rel (a b r) (call output-statuso a b r))
+                   (output-status board matched counter))
+              ops2 ops)))))))
+
+; output-statuso: one-shot, terminal. Never re-adds itself.
+(defrel (output-statuso agenda args ops)
+  (fresh (board matched counter)
+    (conj
+      (== args (output-status board matched counter))
+      (cons-ops
+        (output (final-status board matched counter))
+        (no-ops) ops))))
+
+; main: IDENTICAL seeding to memory_stage2_6.rap -- same board seed
+; (42), same 8 fixed attempt pairs, same tagged belief-state/
+; output-status shapes. Only the ENGINE underneath
+; enqueue-flip-known-matcheso changed; this main is byte-for-byte
+; identical to memory_stage2_6.rap's own main, specifically so any
+; difference in observed output can only come from the swapped-in
+; logic, not from an incidental change to the seeding itself.
+(defrel (main args ops)
+  (fresh (multiset shuffled final-seed initial-belief
+          ops0 ops1 ops2 ops3 ops4 ops5 ops6 ops7 ops8)
+    (conj
+      (== multiset (a a b b c c d d e e f f g g h h))
+      (shuffleo multiset 42 15 shuffled final-seed)
+      (all-unknowno 16 initial-belief)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 0 1))
+                (no-ops) ops0)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 2 3))
+                ops0 ops1)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 4 5))
+                ops1 ops2)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 6 7))
+                ops2 ops3)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 8 9))
+                ops3 ops4)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 10 11))
+                ops4 ops5)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 12 13))
+                ops5 ops6)
+      (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 14 15))
+                ops6 ops7)
+      (cons-ops
+        (add (rel (a b r) (call enqueue-flip-known-matcheso a b r))
+             (belief-state initial-belief))
+        ops7 ops8)
+      (cons-ops
+        (add (rel (a b r) (call output-statuso a b r))
+             (output-status shuffled () 0))
+        ops8 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

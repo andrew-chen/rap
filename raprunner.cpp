@@ -34,7 +34,7 @@
 
 // prog_arena: long-lived. Holds all defrel Goal trees loaded from program file.
 // Never reset.
-alignas(64) static std::uint8_t prog_buf[256 * 1024];
+alignas(64) static std::uint8_t prog_buf[2 * 1024 * 1024];
 
 // intern_arena: long-lived. Holds interned symbols across the session.
 // Never reset.
