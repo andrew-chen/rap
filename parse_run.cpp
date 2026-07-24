@@ -101,11 +101,62 @@ int main() {
   const char* program16 =
     "(run 1 (q) (disj (== q foo)))";
 
+  // Program 17: groundo bug — third disjunct (=/= term (h . t)) records a
+  // deferred constraint rather than failing when term IS a pair, so groundo
+  // produces a spurious extra answer for ground pairs.
+  //
+  // Mechanism: (=/= (1 . 2) (h . t)) calls unify((1.2),(h.t)) which succeeds
+  // (binding h=1, t=2), so ok=true and s2 != st.subst, so the Diseq handler
+  // records a deferred "must not equal" constraint and yields.  Since h and t
+  // are fresh and never referenced again, the constraint is dead and never
+  // fires.  Branch 3 thus spuriously succeeds for pairs.
+  //
+  // Using (run 5 ...) — if the bug is present we get 2 "done" answers;
+  // if only branch 2 (the correct pair branch) fires, we get 1.
+  //
+  // Note: this bug is NOT observable via raprunner (which uses runN(1) and
+  // always picks the first answer from the correct branch 2), only via run N.
+  // Expected with bug: (done done)
+  const char* program17 =
+    "(defrel (groundo term)"
+    "  (conj"
+    "    (boundo term)"
+    "    (disj"
+    "      (== term ())"
+    "      (fresh (h t) (conj (== term (h . t)) (groundo h) (groundo t)))"
+    "      (fresh (h t) (=/= term (h . t))))))"
+    "(run 5 (q)"
+    "  (conj (groundo (1 . 2)) (== q done)))";
+
+  // Program 18: groundo fix — replace the (=/= term (h . t)) third disjunct
+  // with a Probe on a named is-pairo relation.  is-pairo succeeds iff term
+  // unifies with (h . t).  probe(is-pairo, false, ...) fails for any pair,
+  // so the "not a pair" branch is now genuinely exclusive of the pair branch.
+  //
+  // Expected after fix: (done)   — exactly 1 answer
+  const char* program18 =
+    "(defrel (is-pairo term)"
+    "  (fresh (h t) (== term (h . t))))"
+    "(defrel (groundo term)"
+    "  (conj"
+    "    (boundo term)"
+    "    (disj"
+    "      (fresh (h t)"
+    "        (conj"
+    "          (probe (is-pairo term) true 10 true false)"
+    "          (== term (h . t))"
+    "          (groundo h)"
+    "          (groundo t)))"
+    "      (probe (is-pairo term) false 10 true false))))"
+    "(run 5 (q)"
+    "  (conj (groundo (1 . 2)) (== q done)))";
+
   const char* programs[] = {
     program1, program2, program3, program4, program5, program6,
     program7, program8, program9, program10, program11, program12,
     program13,
-    program14, program15, program16
+    program14, program15, program16,
+    program17, program18
   };
 
   // ---- Diagnostic pass: print goal trees and results (one run each) ----

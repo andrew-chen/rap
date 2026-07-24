@@ -144,16 +144,31 @@
 
 ;; Ground/bound checks
 
+; (is-pairo term) — succeeds iff term unifies with (h . t) for some h, t.
+; Named helper so it can be Probe'd for true/false (Probe requires a literal
+; relation call at the call site -- see programming guide Part 2 item 3).
+(defrel (is-pairo term)
+  (fresh (h t) (== term (h . t))))
+
 ; (groundo term) — term is fully ground (no unbound Var anywhere in structure)
 ; Does not recurse into Rel closures.
+;
+; FIX (was: third disjunct used (=/= term (h . t)) with fresh h/t): the
+; Diseq handler records a deferred constraint when u and v unify under new
+; bindings, so (=/= (1 . 2) (h . t)) with fresh h/t SUCCEEDS (deferred
+; constraint that is never triggered), spuriously matching pairs as "not pairs".
+; Fixed by Probe-ing is-pairo true/false to get genuinely exclusive branches.
 (defrel (groundo term)
   (conj
     (boundo term)
     (disj
-      (== term ())
       (fresh (h t)
-        (conj (== term (h . t)) (groundo h) (groundo t)))
-      (fresh (h t) (=/= term (h . t))))))
+        (conj
+          (probe (is-pairo term) true 10 true false)
+          (== term (h . t))
+          (groundo h)
+          (groundo t)))
+      (probe (is-pairo term) false 10 true false))))
 
 ;; List accessors
 

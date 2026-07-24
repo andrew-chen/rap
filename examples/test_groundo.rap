@@ -1,0 +1,52 @@
+; test_groundo.rap — regression tests for stdlib/core.rap's groundo relation.
+;
+; Background: groundo had a bug in its third disjunct -- (fresh (h t)
+; (=/= term (h . t))) was intended to match "not a pair" (ground atom/integer/
+; symbol/nil) but instead spuriously succeeded for pairs too, because the Diseq
+; handler records a deferred constraint (not an immediate failure) when
+; unification of u and v requires new bindings.  For a pair like (1 . 2),
+; unifying with fresh (h . t) binds h=1, t=2 and records a "must not equal"
+; constraint on local variables h/t that are never referenced again -- so the
+; constraint is dead and never fires, and the branch succeeds spuriously.
+;
+; The bug is not observable via raprunner's runN(1) (which always picks the
+; correct branch-2 answer first).  parse_run program 17 demonstrates it via
+; run 5: (groundo (1 . 2)) produces two answers instead of one.
+;
+; Fix: replace the (=/= term (h . t)) disjunct with a Probe on is-pairo
+; (probe (is-pairo term) false 10 true false), which genuinely fails for pairs.
+;
+; Run with: ./raprunner examples/test_groundo.rap < /dev/null
+;
+; Expected output (5 lines, each "pass"):
+;   (groundo-nil pass)
+;   (groundo-int pass)
+;   (groundo-pair pass)
+;   (groundo-list pass)
+;   (groundo-nonground-fails pass)
+
+(defrel (main args ops)
+  (fresh (ops0 ops1 ops2 ops3 ops4)
+    (conj
+      ; (groundo ()) -- empty list is a ground atom (nil, not a pair)
+      (probe (groundo ()) true 50 true false)
+      (cons-ops (output (groundo-nil pass)) (no-ops) ops0)
+
+      ; (groundo 5) -- integer is a ground atom
+      (probe (groundo 5) true 50 true false)
+      (cons-ops (output (groundo-int pass)) ops0 ops1)
+
+      ; (groundo (1 . 2)) -- ground pair; this was the spurious-extra-answer case
+      (probe (groundo (1 . 2)) true 200 true false)
+      (cons-ops (output (groundo-pair pass)) ops1 ops2)
+
+      ; (groundo (1 2 3)) -- ground list (nested pairs)
+      (probe (groundo (1 2 3)) true 500 true false)
+      (cons-ops (output (groundo-list pass)) ops2 ops3)
+
+      ; (groundo (1 . X)) where X is fresh/unbound -- should FAIL
+      (probe (fresh (x) (groundo (1 . x))) false 200 true false)
+      (cons-ops (output (groundo-nonground-fails pass)) ops3 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
