@@ -515,10 +515,44 @@
       (probe (should-readd-o agenda matched-pairs) false 1000 true false)
       (== decision no))))
 
+; original-should-readd-conditiono: factored out so it can be Probe'd
+; as a single flat, literal call (avoiding nested Probe-inside-Probe,
+; which is untested territory in this project and not worth risking
+; inside debug instrumentation).
+(defrel (original-should-readd-conditiono agenda)
+  (conj
+    (has-attempts-o agenda)
+    (probe (tail-is-handoffo agenda) false 1000 true false)))
+
+(defrel (debug-readd-reasono agenda matched-pairs reason)
+  (fresh (count agenda-len
+          original-cond-result almost-empty-cond-result)
+    (conj
+      (unmatched-count-o matched-pairs count)
+      (length-o agenda agenda-len)
+      (disj
+        (conj
+          (probe (original-should-readd-conditiono agenda) true 1000 true false)
+          (== original-cond-result yes))
+        (conj
+          (probe (original-should-readd-conditiono agenda) false 1000 true false)
+          (== original-cond-result no)))
+      (disj
+        (conj
+          (probe (agenda-is-just-belief-and-statuso agenda) true 1000 true false)
+          (== almost-empty-cond-result yes))
+        (conj
+          (probe (agenda-is-just-belief-and-statuso agenda) false 1000 true false)
+          (== almost-empty-cond-result no)))
+      (== reason
+          (readd-reason agenda-len count
+                         original original-cond-result
+                         almost-empty almost-empty-cond-result)))))
+
 (defrel (antagonisto agenda args ops)
   (fresh (status-id board matched counter
           prng-seed unmatched pos1 pos2 unused-next-seed
-          new-board decision counter1
+          new-board decision counter1 debug-reason
           ops0 ops1 ops2)
     (conj
       (find-taggedo agenda (output-status board matched counter) status-id)
@@ -527,8 +561,11 @@
       (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
       (swap-positionso board pos1 pos2 new-board)
       (readd-decision-reporto agenda matched decision)
+      (debug-readd-reasono agenda matched debug-reason)
       (addo counter 1 counter1)
-      (cons-ops (output (antagonist-decision decision)) (no-ops) ops0)
+      (cons-ops
+        (output (antagonist-decision decision debug-reason))
+        (no-ops) ops0)
       (cons-ops (remove status-id) ops0 ops1)
       (disj
         (conj
