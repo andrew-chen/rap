@@ -1,0 +1,196 @@
+; test_new_find_matches.rap — layer 2 of the two-layer test plan:
+; the complete replacement for find-new-matches-collecto, composing
+; every previously-verified piece (distinct-valueso, process-one-
+; valueo, group-pairso, appendo) into the full coordinator.
+;
+; Scope: verify against a scenario with a genuine odd-count value
+; (the actual motivating case for this whole rewrite -- the original
+; find-new-matches-collecto could not correctly handle this, per the
+; earlier design-review finding), alongside ordinary even-count
+; values, confirming both are handled correctly in one pass.
+;
+; Dependencies: distinct-valueso (test_distinct_values.rap),
+; process-one-valueo and its own dependencies (position-in-pairso,
+; group-pairso, positions-with-valueo, not-matchedo,
+; exclude-matchedo -- test_process_one_value.rap), all copied
+; byte-for-byte. appendo is already in stdlib/core.rap.
+;
+; Run with: ./raprunner test_new_find_matches.rap < /dev/null
+
+;; --- copied verbatim from test_distinct_values.rap ---
+
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+(defrel (already-seeno values-so-far val result)
+  (disj
+    (conj
+      (probe (tag-in-listo values-so-far val) true 100 true false)
+      (== result yes))
+    (conj
+      (probe (tag-in-listo values-so-far val) false 100 true false)
+      (== result no))))
+
+(defrel (distinct-valueso belief values)
+  (distinct-valueso-acc belief () values))
+
+(defrel (distinct-valueso-acc belief values-so-far values)
+  (disj
+    (conj (== belief ()) (== values values-so-far))
+    (fresh (pos status rest seen-check)
+      (conj
+        (== belief ((pos . status) . rest))
+        (disj
+          (conj
+            (== status unknown)
+            (distinct-valueso-acc rest values-so-far values))
+          (fresh (new-so-far)
+            (conj
+              (=/= status unknown)
+              (already-seeno values-so-far status seen-check)
+              (disj
+                (conj (== seen-check yes) (== new-so-far values-so-far))
+                (conj
+                  (== seen-check no)
+                  (== new-so-far (status . values-so-far))))
+              (distinct-valueso-acc rest new-so-far values))))))))
+
+;; --- copied verbatim from test_process_one_value.rap ---
+
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+(defrel (group-pairso lst pairs leftover)
+  (disj
+    (conj (== lst ()) (== pairs ()) (== leftover ()))
+    (conj (fresh (x) (== lst (x . ()))) (== pairs ()) (== leftover lst))
+    (fresh (a b rest pairs-rest)
+      (conj
+        (== lst (a . (b . rest)))
+        (group-pairso rest pairs-rest leftover)
+        (== pairs ((a . b) . pairs-rest))))))
+
+(defrel (positions-with-valueo belief value positions)
+  (disj
+    (conj (== belief ()) (== positions ()))
+    (fresh (pos status rest tail)
+      (conj
+        (== belief ((pos . status) . rest))
+        (disj
+          (conj (== status value)
+                (positions-with-valueo rest value tail)
+                (== positions (pos . tail)))
+          (conj (=/= status value)
+                (positions-with-valueo rest value positions)))))))
+
+(defrel (not-matchedo matched-pairs pos result)
+  (disj
+    (conj
+      (probe (position-in-pairso matched-pairs pos) true 100 true false)
+      (== result no))
+    (conj
+      (probe (position-in-pairso matched-pairs pos) false 100 true false)
+      (== result yes))))
+
+(defrel (exclude-matchedo positions matched-pairs result)
+  (disj
+    (conj (== positions ()) (== result ()))
+    (fresh (pos rest keep tail)
+      (conj
+        (== positions (pos . rest))
+        (not-matchedo matched-pairs pos keep)
+        (disj
+          (conj (== keep yes) (== result (pos . tail)))
+          (conj (== keep no) (== result tail)))
+        (exclude-matchedo rest matched-pairs tail)))))
+
+(defrel (process-one-valueo belief value matched-pairs pairs leftover)
+  (fresh (positions filtered)
+    (conj
+      (positions-with-valueo belief value positions)
+      (exclude-matchedo positions matched-pairs filtered)
+      (group-pairso filtered pairs leftover))))
+
+;; --- new: the outer fold over all distinct values ---
+
+(defrel (process-all-valueso belief values matched-pairs
+                              pairs-so-far leftovers-so-far
+                              final-pairs final-leftovers)
+  (disj
+    (conj
+      (== values ())
+      (== final-pairs pairs-so-far)
+      (== final-leftovers leftovers-so-far))
+    (fresh (v rest pairs-v leftover-v new-pairs-so-far new-leftovers-so-far)
+      (conj
+        (== values (v . rest))
+        (process-one-valueo belief v matched-pairs pairs-v leftover-v)
+        (appendo pairs-so-far pairs-v new-pairs-so-far)
+        (appendo leftovers-so-far leftover-v new-leftovers-so-far)
+        (process-all-valueso belief rest matched-pairs
+                              new-pairs-so-far new-leftovers-so-far
+                              final-pairs final-leftovers)))))
+
+; new-find-matches-o: the complete replacement for
+; find-new-matches-collecto. Same output contract (belief,
+; matched-pairs -> result-pairs), so enqueue-flip-known-matcheso's
+; own calling convention does not need to change when this is wired
+; in for real.
+(defrel (new-find-matches-o belief matched-pairs result-pairs)
+  (fresh (values all-pairs all-leftovers cross-pairs discarded-leftover)
+    (conj
+      (distinct-valueso belief values)
+      (process-all-valueso belief values matched-pairs () ()
+                            all-pairs all-leftovers)
+      (group-pairso all-leftovers cross-pairs discarded-leftover)
+      (appendo all-pairs cross-pairs result-pairs))))
+
+;; --- test cases ---
+
+; TEST 1 -- the motivating odd-count scenario: value 'a' appears at
+; THREE positions (0, 2, 5) -- exactly the case the OLD
+; find-new-matches-collecto could not handle correctly (per the
+; earlier design-review finding: it would double-count the middle
+; position). Value 'd' appears at exactly 2 positions (6, 7) --
+; an ordinary even case, to confirm normal matching still works
+; alongside the odd-count handling. matched-pairs is empty.
+;
+; Expected: value a's 3 positions (0,2,5) pair off floor(3/2)=1 pair
+; -- (0 . 2) -- leaving position 5 as a's leftover. Value d's 2
+; positions (6,7) pair off cleanly as (6 . 7), no leftover. Since
+; only ONE leftover exists overall (position 5, from value a --
+; value d had no leftover), group-pairso on the single-element
+; leftovers list (5) produces NO cross-pairs (can't pair one element
+; alone) and a final leftover of (5) which is discarded per design.
+;
+; Exact order hand-traced (distinct-valueso-acc processes belief
+; left-to-right and PREPENDS each newly-seen value, so for this
+; belief the distinct-values list comes out as (d a) -- d seen at
+; position 6, a already seen earlier so not re-prepended, giving
+; final order (d . (a . ())) = (d a); process-all-valueso then
+; processes d first, contributing (6 . 7) to all-pairs, then a,
+; contributing (0 . 2) -- appendo threads these in that same order):
+;
+; Expected output:
+;   (test1-result-pairs ((6 . 7) (0 . 2)))
+(defrel (main args ops)
+  (fresh (belief result ops0)
+    (conj
+      (== belief
+          ((0 . a) (1 . unknown) (2 . a) (3 . unknown)
+           (5 . a) (6 . d) (7 . d)))
+      (new-find-matches-o belief () result)
+      (cons-ops (output (test1-result-pairs result)) (no-ops) ops0)
+      (== ops ops0))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

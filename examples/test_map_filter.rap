@@ -1,0 +1,82 @@
+; test_map_filter.rap — isolated test of mapo and filtero.
+;
+; Scope: mapo applies a first-class relation VALUE (called via `call`,
+; not `Probe` -- sidestepping Probe's literal-goal-at-call-site
+; restriction, which made a truly generic Probe-based filter
+; infeasible, the same restriction that made a general noto
+; infeasible earlier in this project) to every element of a list,
+; producing a parallel list of explicit true/false results. filtero
+; then keeps only the elements whose corresponding result is true --
+; safe to branch on via plain == (not Probe) because by the time
+; filtero runs, every element of the bools list is already a
+; concrete, ground true/false value produced by mapo, not the
+; unresolved success/failure of some other goal.
+;
+; Run with: ./raprunner test_map_filter.rap < /dev/null
+
+; mapo: pred is a first-class relation value taking (element, result)
+; and always succeeding with result bound to the symbol true or
+; false. Applies pred to every element of lst, producing results in
+; the same order.
+(defrel (mapo pred lst results)
+  (disj
+    (conj (== lst ()) (== results ()))
+    (fresh (head tail bool-head bool-tail)
+      (conj
+        (== lst (head . tail))
+        (call pred head bool-head)
+        (mapo pred tail bool-tail)
+        (== results (bool-head . bool-tail))))))
+
+; filtero: given lst and a PARALLEL list of already-ground true/false
+; values (bools, same length and order as lst -- typically produced
+; by mapo), keep only the elements of lst whose corresponding bool is
+; true.
+(defrel (filtero lst bools result)
+  (disj
+    (conj (== lst ()) (== bools ()) (== result ()))
+    (fresh (head tail bhead btail rest)
+      (conj
+        (== lst (head . tail))
+        (== bools (bhead . btail))
+        (disj
+          (conj (== bhead true) (== result (head . rest)))
+          (conj (== bhead false) (== result rest)))
+        (filtero tail btail rest)))))
+
+;; --- test predicates ---
+
+; is-eveno-boolo: a concrete predicate relation for mapo to call.
+; Always succeeds, binding result to true or false (never fails
+; outright) -- this is what makes it safe for filtero's own == b true
+; / == b false split, since mapo guarantees every element of the
+; bools list really is one of these two concrete symbols.
+(defrel (is-eveno-boolo n result)
+  (fresh (r)
+    (modo n 2 r)
+    (disj
+      (conj (== r 0) (== result true))
+      (conj (== r 1) (== result false)))))
+
+;; --- test cases ---
+
+; TEST 1 -- mapo alone: apply is-eveno-boolo to (1 2 3 4 5 6),
+; expect (false true false true false true).
+;
+; TEST 2 -- filtero using mapo's own output: filter (1 2 3 4 5 6)
+; down to just the even ones, expect (2 4 6).
+;
+; Expected output:
+;   (test1-mapo-result (false true false true false true))
+;   (test2-filtero-result (2 4 6))
+(defrel (main args ops)
+  (fresh (lst bools filtered ops0)
+    (conj
+      (== lst (1 2 3 4 5 6))
+      (mapo (rel (n b) (call is-eveno-boolo n b)) lst bools)
+      (filtero lst bools filtered)
+      (cons-ops (output (test1-mapo-result bools)) (no-ops) ops0)
+      (cons-ops (output (test2-filtero-result filtered)) ops0 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

@@ -1,0 +1,67 @@
+; test_group_pairs.rap — isolated test of group-pairso: pair up
+; consecutive elements of a list two at a time, collecting any single
+; leftover element (when the list has odd length) as a 0-or-1-element
+; list, so leftovers from multiple groups can later be combined via
+; appendo (already in stdlib/core.rap) with no special-casing needed
+; for "no leftover" vs "one leftover".
+;
+; Scope: verify against even-length, odd-length, empty, and
+; single-element inputs.
+;
+; Run with: ./raprunner test_group_pairs.rap < /dev/null
+
+; group-pairso: three structurally exhaustive, mutually exclusive
+; cases (empty / exactly one / two-or-more), same safe case-split
+; style as reveal-ato-acc and nth-ato's own guards.
+(defrel (group-pairso lst pairs leftover)
+  (disj
+    (conj (== lst ()) (== pairs ()) (== leftover ()))
+    (conj (fresh (x) (== lst (x . ()))) (== pairs ()) (== leftover lst))
+    (fresh (a b rest pairs-rest)
+      (conj
+        (== lst (a . (b . rest)))
+        (group-pairso rest pairs-rest leftover)
+        (== pairs ((a . b) . pairs-rest))))))
+
+;; --- test cases ---
+
+; TEST 1 -- even length (4 elements): (10 11 12 13).
+; Expect pairs = ((10 . 11) (12 . 13)), leftover = ().
+;
+; TEST 2 -- odd length (5 elements): (10 11 12 13 14).
+; Expect pairs = ((10 . 11) (12 . 13)), leftover = (14).
+;
+; TEST 3 -- empty list.
+; Expect pairs = (), leftover = ().
+;
+; TEST 4 -- single element: (99).
+; Expect pairs = (), leftover = (99).
+;
+; Expected output:
+;   (test1-pairs ((10 . 11) (12 . 13)))
+;   (test1-leftover ())
+;   (test2-pairs ((10 . 11) (12 . 13)))
+;   (test2-leftover (14))
+;   (test3-pairs ())
+;   (test3-leftover ())
+;   (test4-pairs ())
+;   (test4-leftover (99))
+(defrel (main args ops)
+  (fresh (p1 l1 p2 l2 p3 l3 p4 l4
+          ops0 ops1 ops2 ops3 ops4 ops5 ops6)
+    (conj
+      (group-pairso (10 11 12 13) p1 l1)
+      (group-pairso (10 11 12 13 14) p2 l2)
+      (group-pairso () p3 l3)
+      (group-pairso (99) p4 l4)
+      (cons-ops (output (test1-pairs p1)) (no-ops) ops0)
+      (cons-ops (output (test1-leftover l1)) ops0 ops1)
+      (cons-ops (output (test2-pairs p2)) ops1 ops2)
+      (cons-ops (output (test2-leftover l2)) ops2 ops3)
+      (cons-ops (output (test3-pairs p3)) ops3 ops4)
+      (cons-ops (output (test3-leftover l3)) ops4 ops5)
+      (cons-ops (output (test4-pairs p4)) ops5 ops6)
+      (cons-ops (output (test4-leftover l4)) ops6 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

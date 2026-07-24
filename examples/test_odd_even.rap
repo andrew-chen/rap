@@ -1,0 +1,57 @@
+; test_odd_even.rap — isolated test of oddo and eveno.
+;
+; Scope: verify both against a range of cases including a negative
+; input, to confirm modo's floor-division guarantee (0 <= r < b
+; always, even for negative dividends) makes these simple mod-2
+; checks correct without needing any negation.
+;
+; Run with: ./raprunner test_odd_even.rap < /dev/null
+
+; eveno: n is even, i.e. n mod 2 == 0.
+(defrel (eveno n)
+  (fresh (r)
+    (modo n 2 r)
+    (eqo r 0)))
+
+; oddo: n is odd, i.e. n mod 2 == 1. Safe to state directly as == 1
+; (rather than needing "not even") because modo's floor-division
+; semantics guarantee 0 <= r < 2 always, for any integer n including
+; negative ones -- so r can only ever be 0 or 1, never anything else.
+(defrel (oddo n)
+  (fresh (r)
+    (modo n 2 r)
+    (eqo r 1)))
+
+;; --- test cases ---
+
+; TEST 1 -- ordinary even (4).
+; TEST 2 -- ordinary odd (7).
+; TEST 3 -- zero (even).
+; TEST 4 -- negative even (-4): -4 mod 2 should be 0 under floor
+;   division (-4 = 2*(-2) + 0).
+; TEST 5 -- negative odd (-7): -7 mod 2 should be 1 under floor
+;   division (-7 = 2*(-4) + 1), NOT -1, confirming floor semantics
+;   are what make oddo/eveno correct for negative inputs at all.
+;
+; Expected output:
+;   (test1-even-4 yes)
+;   (test2-odd-7 yes)
+;   (test3-even-0 yes)
+;   (test4-even-neg4 yes)
+;   (test5-odd-neg7 yes)
+(defrel (main args ops)
+  (fresh (ops0 ops1 ops2 ops3)
+    (conj
+      (eveno 4)
+      (oddo 7)
+      (eveno 0)
+      (eveno -4)
+      (oddo -7)
+      (cons-ops (output (test1-even-4 yes)) (no-ops) ops0)
+      (cons-ops (output (test2-odd-7 yes)) ops0 ops1)
+      (cons-ops (output (test3-even-0 yes)) ops1 ops2)
+      (cons-ops (output (test4-even-neg4 yes)) ops2 ops3)
+      (cons-ops (output (test5-odd-neg7 yes)) ops3 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

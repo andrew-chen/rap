@@ -1,0 +1,91 @@
+; test_distinct_values.rap — isolated test of distinct-valueso:
+; extract the distinct REVEALED (non-unknown) values appearing in a
+; belief list, each appearing exactly once in the output regardless
+; of how many positions share it.
+;
+; Scope: verify against a belief with duplicates, some unknowns, and
+; confirm order (first-seen order, though the actual order used
+; downstream by the odd-count safety net won't care about ordering).
+;
+; Reuses tag-in-listo (Stage 3's tail-check work) for the membership
+; check rather than writing a new one -- already exactly the right
+; shape (does X appear anywhere in this flat list).
+;
+; Run with: ./raprunner test_distinct_values.rap < /dev/null
+
+; tag-in-listo: copied verbatim from test_tail_check.rap (already
+; independently verified there).
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+; already-seeno: converts tag-in-listo's success/failure into an
+; explicit true/false via Probe, the same pattern used throughout
+; this project (has-new-pairo, check-notin-reporto, etc.) -- needed
+; here because "skip if already seen, add if not" is exactly the
+; disj-exclusivity risk pattern that has bitten this project
+; repeatedly when done via a raw, unconverted goal-success check.
+(defrel (already-seeno values-so-far val result)
+  (disj
+    (conj
+      (probe (tag-in-listo values-so-far val) true 100 true false)
+      (== result yes))
+    (conj
+      (probe (tag-in-listo values-so-far val) false 100 true false)
+      (== result no))))
+
+; distinct-valueso: walk belief, accumulating distinct revealed
+; (non-unknown) values in first-seen order. Skips unknown entries
+; entirely; skips already-seen values (via already-seeno above,
+; genuinely exclusive); adds genuinely new values.
+(defrel (distinct-valueso belief values)
+  (distinct-valueso-acc belief () values))
+
+(defrel (distinct-valueso-acc belief values-so-far values)
+  (disj
+    (conj (== belief ()) (== values values-so-far))
+    (fresh (pos status rest seen-check)
+      (conj
+        (== belief ((pos . status) . rest))
+        (disj
+          (conj
+            (== status unknown)
+            (distinct-valueso-acc rest values-so-far values))
+          (fresh (new-so-far)
+            (conj
+              (=/= status unknown)
+              (already-seeno values-so-far status seen-check)
+              (disj
+                (conj (== seen-check yes) (== new-so-far values-so-far))
+                (conj
+                  (== seen-check no)
+                  (== new-so-far (status . values-so-far))))
+              (distinct-valueso-acc rest new-so-far values))))))))
+
+;; --- test cases ---
+
+; TEST 1 -- belief with duplicates and unknowns mixed:
+; positions holding a, unknown, b, a, unknown, c, b -- distinct
+; revealed values should be (c b a) (in the reverse-accumulation
+; order this implementation naturally produces -- last-seen-first,
+; since new-so-far prepends -- order doesn't matter for the
+; safety net's actual use, but is checked explicitly here so the
+; behavior is documented rather than assumed).
+;
+; Expected output:
+;   (test1-distinct-values (c b a))
+(defrel (main args ops)
+  (fresh (belief result ops0)
+    (conj
+      (== belief
+          ((0 . a) (1 . unknown) (2 . b) (3 . a) (4 . unknown)
+           (5 . c) (6 . b)))
+      (distinct-valueso belief result)
+      (cons-ops (output (test1-distinct-values result)) (no-ops) ops0)
+      (== ops ops0))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

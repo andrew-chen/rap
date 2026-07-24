@@ -368,6 +368,41 @@ right order. This is a distinct check from every other item in this
 list, and is easy to skip precisely because "the code looks right"
 structurally.
 
+### 10. The order of `add` operations within one ChangeSet determines
+    their relative FIFO position — get this backwards and a re-added
+    entry can be silently starved of a companion it depends on
+
+When a single relation's ChangeSet adds multiple new agenda entries
+(e.g. `antagonisto` re-adding both `output-status` and itself), the
+order those `add` operations are threaded through `cons-ops` directly
+determines which entry lands earlier in the FIFO queue. Getting this
+backwards doesn't cause an immediate, obvious failure — it can cause
+a *later* entry to find the agenda in an unexpected state.
+
+Concretely: `antagonisto` added `output-status` before re-adding
+itself. That put `output-status` ahead of the re-added antagonist in
+the queue. By the time the antagonist's next turn came around,
+`output-status` had already been dequeued, run (as a no-op stub in
+this test), and consumed — leaving nothing in the agenda for the
+antagonist's own `find-taggedo` lookup to find. The antagonist's
+entire body failed at that first lookup, before ever reaching a
+`Probe` call — which is exactly why `--trace` showing zero `[probe]`
+lines was the decisive clue (see Part 3/4): it pinpointed the failure
+to *before* the first Probe-using goal, ruling out everything after
+it in one step.
+
+This is the same underlying category of ordering mistake as the
+`enqueue-flip-known-matcheso` fix earlier in this project (which
+needed to push `output-status` *behind* newly-scheduled attempts, not
+ahead of them) — just inverted. **Standing rule**: whenever a relation
+adds more than one new agenda entry in the same ChangeSet, and one of
+those entries is expected to still be present the *next* time some
+other entry runs, explicitly reason through the resulting FIFO order
+(not just "did I remember to add both") before considering the logic
+correct. Getting this right requires thinking about the queue's state
+one or more steps into the future, not just the immediate ChangeSet
+being constructed.
+
 ## Part 3: Working with `Probe`
 
 `(probe Goal Condition Budget Sandbox ReqGround)`:

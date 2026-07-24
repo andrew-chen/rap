@@ -1,0 +1,338 @@
+; test_antagonist_no_readd.rap — full antagonisto isolated test, the
+; should-NOT-re-add scenario: NO attempt entries present at all when
+; the antagonist runs, with plenty of cards unmatched (so the
+; unmatched-count condition is NOT what triggers "no" -- isolating
+; specifically the no-attempts-remain condition).
+;
+; Applies both fixes discovered in test_antagonist_readd.rap from the
+; start, rather than rediscovering them:
+;   1. Add order within the yes-branch ChangeSet: antagonist added
+;      BEFORE output-status (so a re-added antagonist is never
+;      starved of finding output-status still present on its next
+;      turn) -- though in THIS scenario the yes-branch should never
+;      even fire, the antagonisto definition itself is shared/copied
+;      correctly either way.
+;   2. counter is incremented (not passed through unchanged) whenever
+;      output-status is re-added, in both branches.
+;
+; Scope: confirm the reactive loop produces exactly ONE
+; (antagonist-decision no) line, and no antagonist ever re-adds
+; itself (no second decision line ever appears).
+;
+; Dependencies: every piece copied byte-for-byte from its respective
+; verified source file.
+;
+; Run with: ./raprunner test_antagonist_no_readd.rap < /dev/null
+
+;; --- copied verbatim from test_lcg_nth.rap ---
+
+(defrel (lcg-nexto seed next)
+  (fresh (product sum)
+    (mulo 32765 seed product)
+    (addo product 12345 sum)
+    (modo sum 65536 next)))
+
+(defrel (lcg-seqo seed n out-seq final-seed)
+  (disj
+    (conj (eqo n 0) (== out-seq ()) (== final-seed seed))
+    (fresh (n1 next rest)
+      (conj
+        (gto n 0)
+        (subo n 1 n1)
+        (lcg-nexto seed next)
+        (== out-seq (next . rest))
+        (lcg-seqo next n1 rest final-seed)))))
+
+(defrel (lcg-nth-o seed n result)
+  (fresh (discarded-seq)
+    (lcg-seqo seed n discarded-seq result)))
+
+;; --- copied verbatim from test_unmatched_positions.rap ---
+
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+(defrel (range-o lo hi result)
+  (disj
+    (conj (geqo lo hi) (== result ()))
+    (fresh (lo1 rest)
+      (conj
+        (lto lo hi)
+        (addo lo 1 lo1)
+        (range-o lo1 hi rest)
+        (== result (lo . rest))))))
+
+(defrel (unmatched-positionso matched-pairs unmatched)
+  (fresh (all-positions)
+    (conj
+      (range-o 0 16 all-positions)
+      (filter-unmatchedo all-positions matched-pairs unmatched))))
+
+(defrel (filter-unmatchedo positions matched-pairs unmatched)
+  (disj
+    (conj (== positions ()) (== unmatched ()))
+    (fresh (pos rest tail)
+      (conj
+        (== positions (pos . rest))
+        (disj
+          (conj
+            (probe (position-in-pairso matched-pairs pos) true 100 true false)
+            (filter-unmatchedo rest matched-pairs unmatched))
+          (conj
+            (probe (position-in-pairso matched-pairs pos) false 100 true false)
+            (filter-unmatchedo rest matched-pairs tail)
+            (== unmatched (pos . tail))))))))
+
+;; --- copied verbatim from test_pick_two.rap ---
+
+(defrel (lcg-rangeo seed bound next val)
+  (conj
+    (lcg-nexto seed next)
+    (modo next bound val)))
+
+(defrel (nth-ato lst idx val)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== val head))
+      (fresh (idx1)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (nth-ato tail idx1 val))))))
+
+(defrel (length-o lst n)
+  (disj
+    (conj (== lst ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== lst (head . tail))
+        (length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (remove-nth-ato lst idx result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result tail))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (remove-nth-ato tail idx1 new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (pick-two-distincto lst seed val1 val2 next-seed)
+  (fresh (len seed1 i remaining len1 j)
+    (conj
+      (length-o lst len)
+      (lcg-rangeo seed len seed1 i)
+      (nth-ato lst i val1)
+      (remove-nth-ato lst i remaining)
+      (length-o remaining len1)
+      (lcg-rangeo seed1 len1 next-seed j)
+      (nth-ato remaining j val2))))
+
+;; --- copied verbatim from test_last_n.rap ---
+
+(defrel (drop-o lst k result)
+  (disj
+    (conj (== k 0) (== result lst))
+    (fresh (head tail k1)
+      (conj
+        (gto k 0)
+        (== lst (head . tail))
+        (subo k 1 k1)
+        (drop-o tail k1 result)))))
+
+(defrel (last-n-o lst n result)
+  (fresh (len skip)
+    (conj
+      (length-o lst len)
+      (subo len n skip)
+      (drop-o lst skip result))))
+
+;; --- copied verbatim from test_tail_check.rap ---
+
+(defrel (entry-tago entry tag)
+  (fresh (id rel-term args rest)
+    (== entry (id rel-term args))
+    (== args (tag . rest))))
+
+(defrel (tag-in-listo tags tag)
+  (fresh (head rest)
+    (== tags (head . rest))
+    (disj
+      (== head tag)
+      (tag-in-listo rest tag))))
+
+(defrel (tail-has-all-threeo entries)
+  (fresh (e1 e2 e3 t1 t2 t3 tags)
+    (conj
+      (== entries (e1 e2 e3))
+      (entry-tago e1 t1)
+      (entry-tago e2 t2)
+      (entry-tago e3 t3)
+      (== tags (t1 t2 t3))
+      (tag-in-listo tags antagonist)
+      (tag-in-listo tags output-status)
+      (tag-in-listo tags belief-state))))
+
+;; --- copied verbatim from test_readd_conditions.rap ---
+
+(defrel (has-attempts-o agenda)
+  (fresh (entry rest tag)
+    (== agenda (entry . rest))
+    (disj
+      (conj (entry-tago entry tag) (== tag attempt))
+      (has-attempts-o rest))))
+
+(defrel (matched-pairs-length-o matched-pairs n)
+  (disj
+    (conj (== matched-pairs ()) (== n 0))
+    (fresh (head tail n1)
+      (conj
+        (== matched-pairs (head . tail))
+        (matched-pairs-length-o tail n1)
+        (addo n1 1 n)))))
+
+(defrel (unmatched-count-o matched-pairs count)
+  (fresh (num-pairs matched-cards)
+    (conj
+      (matched-pairs-length-o matched-pairs num-pairs)
+      (mulo num-pairs 2 matched-cards)
+      (subo 16 matched-cards count))))
+
+;; --- copied verbatim (with fixed budget) from test_should_readd.rap ---
+
+(defrel (tail-is-handoffo agenda)
+  (fresh (last3)
+    (conj
+      (last-n-o agenda 3 last3)
+      (tail-has-all-threeo last3))))
+
+(defrel (should-readd-o agenda matched-pairs)
+  (fresh (count)
+    (conj
+      (has-attempts-o agenda)
+      (unmatched-count-o matched-pairs count)
+      (geqo count 8)
+      (probe (tail-is-handoffo agenda) false 300 true false))))
+
+;; --- swap-positionso, verified in test_antagonist.rap ---
+
+(defrel (set-nth-ato lst idx new-val result)
+  (fresh (head tail)
+    (== lst (head . tail))
+    (disj
+      (conj (== idx 0) (== result (new-val . tail)))
+      (fresh (idx1 new-tail)
+        (conj
+          (gto idx 0)
+          (subo idx 1 idx1)
+          (set-nth-ato tail idx1 new-val new-tail)
+          (== result (head . new-tail)))))))
+
+(defrel (swap-positionso board pos1 pos2 new-board)
+  (fresh (val1 val2 mid)
+    (conj
+      (nth-ato board pos1 val1)
+      (nth-ato board pos2 val2)
+      (set-nth-ato board pos1 val2 mid)
+      (set-nth-ato mid pos2 val1 new-board))))
+
+(defrel (find-taggedo agenda contents id)
+  (find-by-contento agenda contents id))
+
+;; --- the complete antagonisto, WITH BOTH FIXES from
+;;     test_antagonist_readd.rap applied from the start ---
+
+(defrel (readd-decision-reporto agenda matched-pairs decision)
+  (disj
+    (conj
+      (probe (should-readd-o agenda matched-pairs) true 300 true false)
+      (== decision yes))
+    (conj
+      (probe (should-readd-o agenda matched-pairs) false 300 true false)
+      (== decision no))))
+
+; antagonisto: FIX 1 (add order) -- in the yes branch, antagonist is
+; added BEFORE output-status, so a re-added antagonist is never
+; starved of finding output-status still present on its own next
+; turn (the bug found and fixed in test_antagonist_readd.rap). FIX 2
+; (counter increment) -- counter is incremented via addo before being
+; used in either branch's output-status re-add, rather than passed
+; through unchanged (the second bug found in the same file).
+(defrel (antagonisto agenda args ops)
+  (fresh (status-id board matched counter counter1
+          prng-seed unmatched pos1 pos2 unused-next-seed
+          new-board decision
+          ops0 ops1 ops2)
+    (conj
+      (find-taggedo agenda (output-status board matched counter) status-id)
+      (addo counter 1 counter1)
+      (lcg-nth-o 4242 counter prng-seed)
+      (unmatched-positionso matched unmatched)
+      (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
+      (swap-positionso board pos1 pos2 new-board)
+      (readd-decision-reporto agenda matched decision)
+      (cons-ops (output (antagonist-decision decision)) (no-ops) ops0)
+      (cons-ops (remove status-id) ops0 ops1)
+      (disj
+        (conj
+          (== decision yes)
+          (cons-ops
+            (add (rel (a b r) (call antagonisto a b r)) (antagonist))
+            ops1 ops2)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status new-board matched counter1))
+            ops2 ops))
+        (conj
+          (== decision no)
+          (cons-ops
+            (add (rel (a b r) (call output-statuso a b r))
+                 (output-status new-board matched counter1))
+            ops1 ops))))))
+
+;; --- placeholder output-statuso, this test only ---
+(defrel (output-statuso agenda args ops)
+  (call no-ops ops))
+
+; main: seed just ONE antagonist entry plus output-status -- no
+; attempt entries at all, so has-attempts-o will genuinely fail when
+; the antagonist runs. matched-pairs is only 2 pairs (4 cards
+; matched, 12 unmatched -- comfortably over the >= 8 threshold, so
+; the unmatched-count condition is deliberately NOT what triggers
+; "no" here; only the no-attempts condition is being isolated).
+;
+; Expected: the antagonist runs once, has-attempts-o fails (no
+; attempt-tagged entries anywhere in the agenda), should-readd-o
+; fails, decision=no, antagonist does NOT re-add itself. Only ONE
+; (antagonist-decision no) line should ever appear across the whole
+; run -- no second line, confirming the antagonist genuinely stopped
+; rather than merely reporting "no" while still re-adding (which
+; would be a different bug from the one this test is checking for).
+;
+; Expected output:
+;   (antagonist-decision no)
+(defrel (main args ops)
+  (fresh (board matched ops0)
+    (conj
+      (== board (a b a f g c e b e h d d c g h f))
+      (== matched ((0 . 1) (2 . 3)))
+      (cons-ops
+        (add (rel (a b r) (call antagonisto a b r)) (antagonist))
+        (no-ops) ops0)
+      (cons-ops
+        (add (rel (a b r) (call output-statuso a b r))
+             (output-status board matched 3))
+        ops0 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

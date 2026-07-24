@@ -1,0 +1,130 @@
+; test_process_one_value.rap — isolated test of process-one-valueo,
+; the INNER piece of the coordinating relation that replaces
+; find-new-matches-collecto. Given belief, ONE specific value, and
+; matched-pairs, produce the pairs and leftover for that value alone
+; (positions found, already-matched ones excluded, remainder grouped
+; two at a time).
+;
+; This is layer 1 of a deliberate two-layer test plan: this piece is
+; verified alone first; the outer accumulate-across-all-values-and-
+; cross-pair-leftovers wrapper is layer 2, built and tested separately
+; once this layer is confirmed correct.
+;
+; Reuses position-in-pairso (Stage 3's antagonist work) and
+; group-pairso (verified in test_group_pairs.rap), both byte-for-byte.
+;
+; Run with: ./raprunner test_process_one_value.rap < /dev/null
+
+; position-in-pairso: copied verbatim from test_unmatched_positions.rap
+; (already independently verified there).
+(defrel (position-in-pairso matched-pairs pos)
+  (fresh (p1 p2 rest)
+    (== matched-pairs ((p1 . p2) . rest))
+    (disj
+      (== p1 pos)
+      (== p2 pos)
+      (position-in-pairso rest pos))))
+
+; group-pairso: copied verbatim from test_group_pairs.rap (already
+; independently verified there).
+(defrel (group-pairso lst pairs leftover)
+  (disj
+    (conj (== lst ()) (== pairs ()) (== leftover ()))
+    (conj (fresh (x) (== lst (x . ()))) (== pairs ()) (== leftover lst))
+    (fresh (a b rest pairs-rest)
+      (conj
+        (== lst (a . (b . rest)))
+        (group-pairso rest pairs-rest leftover)
+        (== pairs ((a . b) . pairs-rest))))))
+
+;; --- new: positions-with-valueo, direct implementation ---
+
+; positions-with-valueo: walk belief, collect every position whose
+; status is exactly value. status==value vs status=/=value is a
+; genuinely exclusive structural split (a term either equals a given
+; value or it doesn't -- no Probe needed here, this is a plain data
+; comparison, not branching on some OTHER goal's success/failure).
+(defrel (positions-with-valueo belief value positions)
+  (disj
+    (conj (== belief ()) (== positions ()))
+    (fresh (pos status rest tail)
+      (conj
+        (== belief ((pos . status) . rest))
+        (disj
+          (conj (== status value)
+                (positions-with-valueo rest value tail)
+                (== positions (pos . tail)))
+          (conj (=/= status value)
+                (positions-with-valueo rest value positions)))))))
+
+;; --- new: excluding already-matched positions, Probe-safe from
+;;     the start ---
+
+(defrel (not-matchedo matched-pairs pos result)
+  (disj
+    (conj
+      (probe (position-in-pairso matched-pairs pos) true 100 true false)
+      (== result no))
+    (conj
+      (probe (position-in-pairso matched-pairs pos) false 100 true false)
+      (== result yes))))
+
+(defrel (exclude-matchedo positions matched-pairs result)
+  (disj
+    (conj (== positions ()) (== result ()))
+    (fresh (pos rest keep tail)
+      (conj
+        (== positions (pos . rest))
+        (not-matchedo matched-pairs pos keep)
+        (disj
+          (conj (== keep yes) (== result (pos . tail)))
+          (conj (== keep no) (== result tail)))
+        (exclude-matchedo rest matched-pairs tail)))))
+
+;; --- the inner coordinating piece ---
+
+(defrel (process-one-valueo belief value matched-pairs pairs leftover)
+  (fresh (positions filtered)
+    (conj
+      (positions-with-valueo belief value positions)
+      (exclude-matchedo positions matched-pairs filtered)
+      (group-pairso filtered pairs leftover))))
+
+;; --- test cases ---
+
+; TEST 1 -- value 'a' appears at positions 0, 2, 5 (three positions,
+; odd count). matched-pairs is empty (none excluded).
+; Expected: pairs = ((0 . 2)), leftover = (5).
+;
+; TEST 2 -- value 'b' appears at positions 1, 3, 4, 7 (four positions,
+; even count). matched-pairs already contains (3 . 7) as a MATCHED
+; pair -- wait, that's odd framing; more realistically matched-pairs
+; contains SOME OTHER pair not involving value b's positions at all,
+; to confirm exclusion only removes what it should. Let's use
+; matched-pairs = ((1 . 3)) -- meaning positions 1 and 3 are already
+; matched (perhaps as part of some earlier confirmed pair, even
+; though in THIS test they happen to share belief value 'b' too --
+; this models the antagonist-staleness scenario where matched status
+; and CURRENT belief value can be inconsistent). Excluding 1 and 3
+; from b's positions (1 3 4 7) leaves (4 7).
+; Expected: pairs = ((4 . 7)), leftover = ().
+;
+; Expected output:
+;   (test1-pairs ((0 . 2)))
+;   (test1-leftover (5))
+;   (test2-pairs ((4 . 7)))
+;   (test2-leftover ())
+(defrel (main args ops)
+  (fresh (belief p1 l1 p2 l2 ops0 ops1 ops2)
+    (conj
+      (== belief
+          ((0 . a) (1 . b) (2 . a) (3 . b) (4 . b) (5 . a) (7 . b)))
+      (process-one-valueo belief a () p1 l1)
+      (process-one-valueo belief b ((1 . 3)) p2 l2)
+      (cons-ops (output (test1-pairs p1)) (no-ops) ops0)
+      (cons-ops (output (test1-leftover l1)) ops0 ops1)
+      (cons-ops (output (test2-pairs p2)) ops1 ops2)
+      (cons-ops (output (test2-leftover l2)) ops2 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
