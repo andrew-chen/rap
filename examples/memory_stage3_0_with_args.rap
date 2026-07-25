@@ -551,15 +551,18 @@
 
 (defrel (antagonisto agenda args ops)
   (fresh (lineage-id generation generation1
-          status-id board matched counter
+          status-id board matched counter board-seed antagonist-seed
           prng-seed unmatched pos1 pos2 unused-next-seed
           new-board decision counter1 debug-reason
           ops0 ops1 ops2)
     (conj
       (== args (antagonist lineage-id generation))
       (addo generation 1 generation1)
-      (find-taggedo agenda (output-status board matched counter) status-id)
-      (lcg-nth-o 99 counter prng-seed)
+      (find-taggedo agenda
+                     (output-status board matched counter
+                                    board-seed antagonist-seed)
+                     status-id)
+      (lcg-nth-o antagonist-seed counter prng-seed)
       (unmatched-positionso matched unmatched)
       (pick-two-distincto unmatched prng-seed pos1 pos2 unused-next-seed)
       (swap-positionso board pos1 pos2 new-board)
@@ -594,13 +597,15 @@
             ops1 ops2)
           (cons-ops
             (add (rel (a b r) (call output-statuso a b r))
-                 (output-status new-board matched counter1))
+                 (output-status new-board matched counter1
+                                board-seed antagonist-seed))
             ops2 ops))
         (conj
           (== decision no)
           (cons-ops
             (add (rel (a b r) (call output-statuso a b r))
-                 (output-status new-board matched counter1))
+                 (output-status new-board matched counter1
+                                board-seed antagonist-seed))
             ops1 ops))))))
 
 ;; --- placeholder attempto, this test only. The real attempto
@@ -625,12 +630,15 @@
   (fresh (pos1 pos2 board
           belief-id old-belief belief1 new-belief
           status-id old-matched old-counter new-counter
+          board-seed antagonist-seed
           val1 val2 outcome
           ops0 ops1 ops2 ops3)
     (conj
       (== args (attempt pos1 pos2))
       (find-taggedo agenda (belief-state old-belief) belief-id)
-      (find-taggedo agenda (output-status board old-matched old-counter)
+      (find-taggedo agenda
+                     (output-status board old-matched old-counter
+                                    board-seed antagonist-seed)
                     status-id)
       (board-ato board pos1 val1)
       (board-ato board pos2 val2)
@@ -655,13 +663,14 @@
           (cons-ops
             (add (rel (a b r) (call output-statuso a b r))
                  (output-status board ((pos1 . pos2) . old-matched)
-                                new-counter))
+                                new-counter board-seed antagonist-seed))
             ops3 ops))
         (conj
           (== outcome no-match)
           (cons-ops
             (add (rel (a b r) (call output-statuso a b r))
-                 (output-status board old-matched new-counter))
+                 (output-status board old-matched new-counter
+                                board-seed antagonist-seed))
             ops3 ops))))))
 
 ; pairs->add-attempts-opso: fold a list of newly-discovered pairs into
@@ -684,11 +693,14 @@
 ; find-new-matches-collecto -- same calling convention, different
 ; callee.
 (defrel (enqueue-flip-known-matcheso agenda args ops)
-  (fresh (belief status-id board matched counter new-pairs
-          attempt-ops ops0 ops1 ops2)
+  (fresh (belief status-id board matched counter board-seed antagonist-seed
+          new-pairs attempt-ops ops0 ops1 ops2)
     (conj
       (== args (belief-state belief))
-      (find-taggedo agenda (output-status board matched counter) status-id)
+      (find-taggedo agenda
+                     (output-status board matched counter
+                                    board-seed antagonist-seed)
+                     status-id)
       (new-find-matches-o belief matched new-pairs)
       (disj
         (conj
@@ -706,22 +718,35 @@
             (cons-ops (remove status-id) ops1 ops2)
             (cons-ops
               (add (rel (a b r) (call output-statuso a b r))
-                   (output-status board matched counter))
+                   (output-status board matched counter
+                                  board-seed antagonist-seed))
               ops2 ops)))))))
 
-; output-statuso: one-shot, terminal. Never re-adds itself.
+; output-statuso: one-shot, terminal. Never re-adds itself. Reports
+; both seeds too, so the final line records what was actually used
+; for a given run, since both are now derived from a single
+; command-line argument rather than hardcoded.
 (defrel (output-statuso agenda args ops)
-  (fresh (board matched counter)
+  (fresh (board matched counter board-seed antagonist-seed)
     (conj
-      (== args (output-status board matched counter))
+      (== args (output-status board matched counter
+                              board-seed antagonist-seed))
       (cons-ops
-        (output (final-status board matched counter))
+        (output (final-status board matched counter
+                              board-seed antagonist-seed))
         (no-ops) ops))))
 
-; main: Stage 3 -- SAME board seed (42) and same 8 fixed attempt
-; pairs as memory_stage2_6.rap, with an antagonisto entry interleaved
-; after each of the FIRST 7 initial attempts only -- NOT after the
-; 8th (attempt 14 15).
+; main: Stage 3 -- board and antagonist seeds are now derived from a
+; single command-line argument (one character) rather than hardcoded,
+; so a run can be varied from the command line for testing and
+; timing measurement: (charo c ascii-val) converts the argument to
+; its ASCII integer value, then two calls to lcg-nexto derive two
+; distinct, full-range seeds from it -- one for the board shuffle,
+; one for the antagonist -- so seed diversity is not limited to the
+; ~32-126 range of a single printable character, only the initial
+; derivation point is. Same 8 fixed attempt pairs as before, with an
+; antagonisto entry interleaved after each of the FIRST 7 initial
+; attempts only -- NOT after the 8th (attempt 14 15).
 ;
 ; WHY ONLY 7, NOT 8: this file's own first real test run revealed a
 ; genuine design finding (not a coding bug): with all 8 antagonists
@@ -752,12 +777,17 @@
 ; belief-state + output-status = 17 total cons-ops calls, threading
 ; ops0 through ops16.
 (defrel (main args ops)
-  (fresh (multiset shuffled final-seed initial-belief
+  (fresh (seed-char rest-args-ignored ascii-val board-seed antagonist-seed
+          multiset shuffled final-seed initial-belief
           ops0 ops1 ops2 ops3 ops4 ops5 ops6 ops7 ops8 ops9
           ops10 ops11 ops12 ops13 ops14 ops15 ops16)
     (conj
+      (== args (seed-char . rest-args-ignored))
+      (charo seed-char ascii-val)
+      (lcg-nexto ascii-val board-seed)
+      (lcg-nexto board-seed antagonist-seed)
       (== multiset (a a b b c c d d e e f f g g h h))
-      (shuffleo multiset 123 15 shuffled final-seed)
+      (shuffleo multiset board-seed 15 shuffled final-seed)
       (all-unknowno 16 initial-belief)
       (cons-ops (add (rel (a b r) (call attempto a b r)) (attempt 0 1))
                 (no-ops) ops0)
@@ -802,7 +832,7 @@
         ops14 ops15)
       (cons-ops
         (add (rel (a b r) (call output-statuso a b r))
-             (output-status shuffled () 0))
+             (output-status shuffled () 0 board-seed antagonist-seed))
         ops15 ops16)
       (== ops ops16))))
 
