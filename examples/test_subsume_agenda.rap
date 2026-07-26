@@ -1,0 +1,191 @@
+; test_subsume_agenda.rap — subsumeso demonstrated against the REAL,
+; engine-managed agenda, not a hand-built term passed directly to
+; main. An earlier draft of this test unified against a literal
+; agenda term constructed inside main itself, which tests nothing
+; about the real agenda mechanism at all -- caught before being
+; accepted as a valid test, the same category of mistake as calling
+; a relation directly and inspecting intermediate values instead of
+; letting the real reactive loop run it (the lesson from Stage 2.4's
+; own history).
+;
+; Design: main enqueues (a) a self-directed subsuming query with NO
+; hint about which entry is "strong" -- it must discover subsumption
+; relationships purely from the agenda's own contents when it
+; actually runs -- and (b) several "explore" entries, some of which
+; will be subsumed by others. The subsuming query is seeded FIRST, so
+; FIFO guarantees it runs (and prunes) before any explore entry gets
+; its own turn. Every explore entry that runs prints a diagnostic;
+; entries that get pruned before their turn never print anything,
+; which is how we observe that pruning actually took effect, not
+; just that the subsuming query claimed to do something.
+;
+; Run with: ./raprunner test_subsume_agenda.rap < /dev/null
+
+; subsumeso: strong subsumes weak iff both concern the same
+; hypothesis H and strong's exploration depth is at least weak's.
+(defrel (subsumeso strong weak)
+  (fresh (qidS relS qidW relW H dS dW)
+    (== strong (qidS relS (explore H dS)))
+    (== weak (qidW relW (explore H dW)))
+    (leqo dW dS)))
+
+; is-explore-entryo: succeeds iff entry's args are shaped
+; (explore H D) for some H, D -- used to skip over the
+; subsume-and-prune-o entry itself (and anything else non-explore)
+; when scanning the agenda.
+(defrel (is-explore-entryo entry)
+  (fresh (qid rel-term H D)
+    (== entry (qid rel-term (explore H D)))))
+
+; has-subsuming-entryo: succeeds iff SOME entry in agenda (other than
+; candidate itself, by qid) subsumes candidate.
+(defrel (has-subsuming-entryo agenda candidate)
+  (fresh (entry rest qidC relC argsC qidE)
+    (== candidate (qidC relC argsC))
+    (== agenda (entry . rest))
+    (disj
+      (fresh (relE argsE)
+        (conj
+          (== entry (qidE relE argsE))
+          (=/= qidE qidC)
+          (subsumeso entry candidate)))
+      (has-subsuming-entryo rest candidate))))
+
+; is-subsumedo: converts has-subsuming-entryo's success/failure into
+; an explicit, genuinely exclusive yes/no via Probe -- the
+; established pattern throughout this project, needed here because
+; "has a subsuming entry" is a genuine existence search, not a simple
+; structural comparison.
+(defrel (is-subsumedo agenda candidate result)
+  (disj
+    (conj
+      (probe (has-subsuming-entryo agenda candidate) true 1000 true false)
+      (== result yes))
+    (conj
+      (probe (has-subsuming-entryo agenda candidate) false 1000 true false)
+      (== result no))))
+
+; find-all-subsumed-qidso: walk agenda (the shrinking copy driving
+; recursion), checking each explore entry against full-agenda (the
+; unchanging whole, needed for has-subsuming-entryo's existence check
+; to see every entry regardless of how far the outer walk has
+; progressed) -- same full-context-threading pattern already used in
+; this project's own find-new-matches-collecto/distinct-valueso work.
+;
+; SCOPING NOTE: this assumes no subsumption CHAINS (an entry
+; subsumed by another that is itself subsumed by a third) -- for this
+; test, every subsumed entry is subsumed directly by the single
+; strongest entry, so removal order never matters. Chains are a
+; genuinely separate question not addressed here.
+; is-explore-entryo-reporto: converts is-explore-entryo's success/
+; failure into an explicit, genuinely exclusive yes/no via Probe --
+; needed here because an earlier draft tried to check "is NOT an
+; explore entry" via (=/= entry (qid relE argsE)) where qid/relE/
+; argsE were fresh, never-bound variables -- exactly the groundo bug
+; pattern caught earlier in this project: disequality against
+; unconstrained fresh variables trivially succeeds via a deferred,
+; never-checked constraint, regardless of whether entry actually
+; matches the shape or not. Caught before running, fixed with the
+; same Probe-based pattern used to fix groundo itself.
+(defrel (is-explore-entryo-reporto entry result)
+  (disj
+    (conj (probe (is-explore-entryo entry) true 1000 true false)
+          (== result yes))
+    (conj (probe (is-explore-entryo entry) false 1000 true false)
+          (== result no))))
+
+(defrel (find-all-subsumed-qidso agenda full-agenda qids)
+  (disj
+    (conj (== agenda ()) (== qids ()))
+    (fresh (entry rest qid relE argsE tail result is-explore)
+      (conj
+        (== agenda (entry . rest))
+        (is-explore-entryo-reporto entry is-explore)
+        (disj
+          (conj
+            (== is-explore yes)
+            (== entry (qid relE argsE))
+            (is-subsumedo full-agenda entry result)
+            (disj
+              (conj
+                (== result yes)
+                (find-all-subsumed-qidso rest full-agenda tail)
+                (== qids (qid . tail)))
+              (conj
+                (== result no)
+                (find-all-subsumed-qidso rest full-agenda qids))))
+          (conj
+            (== is-explore no)
+            (find-all-subsumed-qidso rest full-agenda qids)))))))
+
+; qids->remove-opso: fold a list of qids into a ChangeSet of remove
+; operations. Copied verbatim from the corrected Section 5.2 listing
+; (test_stage2.cpp's own tested version).
+(defrel (qids->remove-opso qids ops)
+  (disj
+    (conj (== qids ()) (no-ops ops))
+    (fresh (qid rest ops-tail)
+      (conj
+        (== qids (qid . rest))
+        (qids->remove-opso rest ops-tail)
+        (cons-ops (remove qid) ops-tail ops)))))
+
+; subsume-and-pruneo: the self-directed subsuming query. Reads the
+; REAL agenda it is handed at dequeue time, discovers ALL subsumption
+; relationships within it (no hint about which entry is "strong"),
+; removes every subsumed entry, and reports which qids it pruned.
+; One-shot -- does not re-add itself.
+(defrel (subsume-and-pruneo agenda args ops)
+  (fresh (subsumed-qids ops0)
+    (conj
+      (find-all-subsumed-qidso agenda agenda subsumed-qids)
+      (qids->remove-opso subsumed-qids ops0)
+      (cons-ops (output (subsume-and-pruneo-ran subsumed-qids)) ops0 ops))))
+
+; explore-queryo: one-shot. When run, reports which hypothesis/depth
+; it was exploring. If it survives (was not pruned before its turn),
+; this diagnostic is the proof.
+(defrel (explore-queryo agenda args ops)
+  (fresh (H D)
+    (conj
+      (== args (explore H D))
+      (cons-ops (output (explore-ran H D)) (no-ops) ops))))
+
+; main: seed the subsuming query FIRST (so it runs, and prunes,
+; before any explore entry gets a turn), then four explore entries:
+; one strong (hypA, depth 3), two it subsumes (hypA depth 1 and
+; depth 2), and one unrelated (hypB, depth 5) that must survive
+; regardless of depth since it concerns a different hypothesis.
+;
+; Expected behavior: subsume-and-pruneo runs first, discovers hypA
+; depth-1 and depth-2 are both subsumed by hypA depth-3, removes
+; them. Then only the hypA-depth-3 entry and the hypB entry remain
+; and get their turns, each printing its own diagnostic. The two
+; pruned entries must NEVER print anything, since they never get
+; dequeued.
+;
+; Expected output:
+;   (subsume-and-pruneo-ran (<qid-of-depth1> <qid-of-depth2>))
+;   (explore-ran hypA 3)
+;   (explore-ran hypB 5)
+(defrel (main args ops)
+  (fresh (ops0 ops1 ops2 ops3)
+    (conj
+      (cons-ops
+        (add (rel (a b r) (call subsume-and-pruneo a b r)) ())
+        (no-ops) ops0)
+      (cons-ops
+        (add (rel (a b r) (call explore-queryo a b r)) (explore hypA 1))
+        ops0 ops1)
+      (cons-ops
+        (add (rel (a b r) (call explore-queryo a b r)) (explore hypA 2))
+        ops1 ops2)
+      (cons-ops
+        (add (rel (a b r) (call explore-queryo a b r)) (explore hypA 3))
+        ops2 ops3)
+      (cons-ops
+        (add (rel (a b r) (call explore-queryo a b r)) (explore hypB 5))
+        ops3 ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))

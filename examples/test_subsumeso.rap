@@ -1,0 +1,80 @@
+; test_subsumeso.rap — isolated test of subsumeso, the semantic
+; subsumption relation described in the paper's "Semantic
+; subsumption" paragraph (Section 5.2), which currently has NO tested
+; implementation anywhere in this project. Built here to produce a
+; genuinely verified basis for that paragraph's code listing, using
+; the REAL agenda entry shape (id rel-term args) confirmed against
+; test_stage2.cpp, not the paper's currently-shown (q qid ...) shape
+; (which does not match any tested code).
+;
+; Run with: ./raprunner test_subsumeso.rap < /dev/null
+
+; subsumeso: strong subsumes weak iff both concern the same
+; hypothesis H and strong's exploration depth is at least weak's.
+(defrel (subsumeso strong weak)
+  (fresh (qidS relS qidW relW H dS dW)
+    (== strong (qidS relS (explore H dS)))
+    (== weak (qidW relW (explore H dW)))
+    (leqo dW dS)))
+
+; not-subsumed-byo: the genuine logical negation of subsumeso --
+; NOT(same H AND dW <= dS) = (different H) OR (same H AND dW > dS).
+; This is a complete, mutually exclusive case split (not an
+; approximation): different-H and same-H-with-greater-depth are the
+; only two ways subsumeso can fail, and they cannot both hold at
+; once, so together with subsumeso's own condition every possible
+; pair of entries is accounted for exactly once.
+(defrel (not-subsumed-byo strong weak)
+  (fresh (qidS relS qidW relW HS dS HW dW)
+    (== strong (qidS relS (explore HS dS)))
+    (== weak (qidW relW (explore HW dW)))
+    (disj
+      (=/= HS HW)
+      (conj (== HS HW) (gto dW dS)))))
+
+; collect-subsumed-qidso: given a specific strong entry and the
+; agenda, collect the qids of all OTHER entries it subsumes. Mirrors
+; collect-weak-qidso's own two-branch structure exactly (mutually
+; exclusive collect/skip via the pair above), with subsumeso/
+; not-subsumed-byo playing the role weak-check-qido/
+; not-weak-check-qido played in the original.
+(defrel (collect-subsumed-qidso agenda strong qids)
+  (disj
+    (conj (== agenda ()) (== qids ()))
+    (fresh (entry rest qid relE args tail)
+      (conj
+        (== agenda (entry . rest))
+        (disj
+          (conj
+            (subsumeso strong entry)
+            (== entry (qid relE args))
+            (collect-subsumed-qidso rest strong tail)
+            (== qids (qid . tail)))
+          (conj
+            (not-subsumed-byo strong entry)
+            (collect-subsumed-qidso rest strong qids)))))))
+
+;; --- test case ---
+
+; A small agenda of 4 entries exploring the same hypothesis hypA at
+; depths 1, 2, 3, and a fourth entry at a different hypothesis hypB
+; (which must never be collected regardless of depth). The strong
+; entry (id 20, depth 3) should subsume ids 21 (depth 1) and 22
+; (depth 2), but NOT id 23 (different hypothesis).
+;
+; Expected output:
+;   (subsumed-qids (21 22))
+(defrel (main args ops)
+  (fresh (agenda strong result ops0)
+    (conj
+      (== strong (20 minimal-rel (explore hypA 3)))
+      (== agenda
+          ((21 minimal-rel (explore hypA 1))
+           (22 minimal-rel (explore hypA 2))
+           (23 minimal-rel (explore hypB 5))))
+      (collect-subsumed-qidso agenda strong result)
+      (cons-ops (output (subsumed-qids result)) (no-ops) ops0)
+      (== ops ops0))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
