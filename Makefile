@@ -59,7 +59,7 @@ examples: raprunner repl
 clean:
 	rm -f parse_run.o parse_run rap/test_rap.o test_rap security/security_test \
 	      core_test_extension rap_test_extension test_stage2 repl raprunner \
-	      test_arith
+	      test_arith raprunner_asan raprunner.dSYM raprunner_asan.dSYM
 
 run: parse_run
 	./parse_run

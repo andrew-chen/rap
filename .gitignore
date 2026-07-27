@@ -48,21 +48,15 @@ test_rap
 # Output files
 *.txt
 
+# debugging files
+*.dSYM
+*_asan
+
 # Output and artifact files
 *.txt
 *.out
-test_stage2_asan
 *.plist
 *.yml
 security/security_test
 raprunner
 repl
-security/security_test
-raprunner_asan
-raprunner
-raprunner
-raprunner
-raprunner
-repl
-security/security_test
-raprunner
