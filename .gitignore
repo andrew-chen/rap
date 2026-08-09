@@ -63,3 +63,8 @@ repl
 test_arith
 test_loop_additions
 rap_doctest
+
+# Compiled benchmark binaries (no extension, not covered by root-level patterns)
+rap/bench_stage2
+rap/bench_stage2_dbg
+security/bench

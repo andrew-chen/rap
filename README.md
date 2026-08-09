@@ -48,11 +48,31 @@ Two properties follow from this design:
 git clone https://github.com/andrew-chen/rap
 cd rap
 make
-./parse_run      # runs 18 example programs
-make test        # runs full test suite
+./parse_run                       # runs 18 example programs
+make test                         # runs full test suite (8 binaries)
+make raptests                     # .rap doctest suite (must run from project root)
+make examples                     # smoke-tests the interactive raprunner demos
 ```
 
-Requires a C++20 compiler (`clang++` or `g++`). No other dependencies.
+Run an interactive demo directly:
+
+```bash
+echo "hello world" | ./raprunner examples/demos/echo.rap
+```
+
+Run the memory-game worked example (fixed seed, no arguments required):
+
+```bash
+echo "" | ./raprunner examples/memory/memory_stage3_0.rap
+```
+
+To explore with a variable seed, use the with-args variant, which takes a single character as its seed (the character's ASCII value seeds the LCG):
+
+```bash
+echo "" | ./raprunner examples/memory/memory_stage3_0_with_args.rap a
+```
+
+**Prerequisites:** A C++20 compiler (`clang++` or `g++`). The core engine, all test binaries, and `parse_run` have no other dependencies. `raprunner` additionally requires POSIX headers (`unistd.h`, `poll.h`, `sys/types.h`); it compiles on Linux and macOS but requires a compatibility layer on Windows. The timing analysis scripts (if used) require Python 3, but Python is not needed for any part of the build or test suite.
 
 ---
 
@@ -136,32 +156,50 @@ deeper one — comparing depths via `leqo` — and emits a ChangeSet removing th
 
 ```
 rap/
-├── core/                   # Self-contained µKanren engine
-│   ├── mktypes.hpp         # Forward declarations (breaks circular deps)
-│   ├── arena.hpp           # Bump allocator (caller-supplied buffer, POD-only)
-│   ├── intern.hpp          # FNV-1a symbol interning, pointer-identity eq.
-│   ├── core.hpp            # Terms, goals, unifier, Evaluator class, Probe
-│   └── sexp_parser.hpp     # S-expr tokenizer, goal compiler, printer
+├── core/                       # Self-contained µKanren engine
+│   ├── mktypes.hpp             # Forward declarations (breaks circular deps)
+│   ├── arena.hpp               # Bump allocator (caller-supplied buffer, POD-only)
+│   ├── intern.hpp              # FNV-1a symbol interning, pointer-identity eq.
+│   ├── core.hpp                # Terms, goals, unifier, Evaluator class, Probe
+│   ├── sexp_parser.hpp         # S-expr tokenizer, goal compiler, printer
+│   ├── test_extension.cpp      # Base Evaluator backtrack tests (Stage 0C)
+│   └── test_arith.cpp          # Native arithmetic relation tests
 │
-├── rap/                    # Agenda layer
-│   ├── changeset.hpp       # Op, ChangeSet, deep_copy_term
-│   ├── agenda.hpp          # Queue 2: ring-buffer, pointer-rewriting compaction
-│   ├── spine.hpp           # Short-lived Pair nodes for agenda list term
-│   ├── loop.hpp            # Reactive execution loop (RapLoop)
-│   ├── rap.hpp             # RapEvaluator: no-ops, cons-ops, ClientRegion
-│   ├── work_queue.hpp      # Rap Work Queue (placeholder, not yet implemented)
-│   ├── test_rap.cpp        # Extension mechanism tests (Stage 0B)
-│   ├── test_rap_extension.cpp # RapEvaluator backtrack tests (Stage 0C)
-│   ├── test_stage2.cpp     # subsumeso / subsume-and-pruneo validation
+├── rap/                        # Agenda layer
+│   ├── changeset.hpp           # Op, ChangeSet, deep_copy_term
+│   ├── agenda.hpp              # Queue 2: ring-buffer, pointer-rewriting compaction
+│   ├── spine.hpp               # Short-lived Pair nodes for agenda list term
+│   ├── loop.hpp                # Reactive execution loop (RapLoop)
+│   ├── rap.hpp                 # RapEvaluator: no-ops, cons-ops, ClientRegion
+│   ├── work_queue.hpp          # Rap Work Queue (stub — not yet implemented)
+│   ├── test_rap.cpp            # Extension mechanism tests (Stage 0B)
+│   ├── test_rap_extension.cpp  # RapEvaluator backtrack tests (Stage 0C)
+│   ├── test_stage2.cpp         # subsumeso / subsume-and-pruneo validation
 │   ├── test_loop_additions.cpp # RapLoop::call_main, quiet flag, build_args_term
-│   ├── rap_doctest.cpp     # .rap doctest runner (;;; EXPECT framework)
-│   └── bench_stage2.cpp    # Benchmarking
-
+│   ├── rap_doctest.cpp         # .rap doctest runner (;;; EXPECT framework)
+│   └── bench_stage2.cpp        # Benchmarking
 │
-├── security/               # Embedded security policy case studies
-│   └── security_test.cpp   # RBAC + network policy, 10/10 correct
+├── security/                   # Embedded security policy case studies
+│   ├── security_test.cpp       # RBAC + network policy, 10/10 correct
+│   └── bench.cpp               # Parse-vs-evaluation timing benchmark
 │
-├── parse_run.cpp           # 18 example programs including mutual recursion
+├── stdlib/                     # Standard library of relational definitions
+│   └── core.rap                # Loaded automatically by raprunner and rap_doctest
+│
+├── tests/                      # .rap doctest fixtures (;;; EXPECT framework)
+│   ├── test_hello.rap
+│   ├── test_multi.rap
+│   └── test_with_args.rap
+│
+├── examples/                   # Example programs (see examples/README.md)
+│   ├── demos/                  # Six interactive raprunner demos
+│   ├── memory/                 # Staged memory-game worked example (stage 0–3)
+│   │   └── component_tests/    # Isolated component tests for memory-game relations
+│   └── prng.rap                # LCG PRNG (illustrative; used by memory stage 3)
+│
+├── parse_run.cpp               # 18 example programs including mutual recursion
+├── repl.cpp                    # Interactive REPL (core/ only, no agenda layer)
+├── raprunner.cpp               # Reactive program runner (full agenda layer; POSIX)
 └── Makefile
 ```
 
@@ -303,10 +341,13 @@ process lifetime, threads, or I/O.
 ## Repository Layout
 
 ```
-docs/          Stage specifications (internal development documentation)
+docs/          Stage specifications and internal development documentation
 core/          Self-contained engine — usable independently of the agenda layer
 rap/           Agenda layer — Queue 2, ChangeSet, reactive execution loop
 security/      Security policy case studies (depends on core/ only)
+stdlib/        Standard library of relational definitions (core.rap)
+tests/         .rap doctest fixtures for the ;;; EXPECT framework
+examples/      Example programs (demos/, memory/, memory/component_tests/)
 ```
 
 The `docs/` directory contains the stage-by-stage design specifications

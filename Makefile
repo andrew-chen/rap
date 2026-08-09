@@ -14,7 +14,7 @@ parse_run.o: parse_run.cpp core/sexp_parser.hpp core/core.hpp core/intern.hpp co
 test_rap: rap/test_rap.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-rap/test_rap.o: rap/test_rap.cpp rap/rap.hpp rap/work_queue.hpp core/sexp_parser.hpp core/core.hpp core/intern.hpp core/arena.hpp core/mktypes.hpp
+rap/test_rap.o: rap/test_rap.cpp rap/rap.hpp core/sexp_parser.hpp core/core.hpp core/intern.hpp core/arena.hpp core/mktypes.hpp
 	$(CXX) $(CXXFLAGS) -c rap/test_rap.cpp -o rap/test_rap.o
 
 security/security_test: security/security_test.cpp core/sexp_parser.hpp core/core.hpp core/intern.hpp core/arena.hpp core/mktypes.hpp
@@ -26,7 +26,7 @@ core_test_extension: core/test_extension.cpp \
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 rap_test_extension: rap/test_rap_extension.cpp \
-    rap/rap.hpp rap/work_queue.hpp core/sexp_parser.hpp core/core.hpp \
+    rap/rap.hpp core/sexp_parser.hpp core/core.hpp \
     core/intern.hpp core/arena.hpp core/mktypes.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
@@ -74,8 +74,9 @@ examples: raprunner repl
 clean:
 	rm -f parse_run.o parse_run rap/test_rap.o test_rap security/security_test \
 	      core_test_extension rap_test_extension test_stage2 repl raprunner \
-	      test_arith test_loop_additions rap_doctest *_asan
-	rm -rf raprunner.dSYM *_asan.dSYM
+	      test_arith test_loop_additions rap_doctest *_asan \
+	      rap/bench_stage2 rap/bench_stage2_dbg security/bench
+	rm -rf raprunner.dSYM *_asan.dSYM rap/bench_stage2_dbg.dSYM
 
 run: parse_run
 	./parse_run
