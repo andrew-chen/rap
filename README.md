@@ -47,7 +47,7 @@ Two properties follow from this design:
 
 ## Contributions
 
-Three separable contributions:
+Three distinct contributions:
 
 - **An embeddable C++20 relational core.** A zero-dependency, arena-based
   µKanren implementation extended with anonymous relations, disequality
