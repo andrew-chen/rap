@@ -62,3 +62,4 @@ raprunner
 repl
 test_arith
 test_loop_additions
+rap_doctest
