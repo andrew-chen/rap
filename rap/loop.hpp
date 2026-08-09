@@ -41,7 +41,7 @@ static_assert(std::is_trivially_destructible_v<OutputQueue>);
 // ============================================================================
 struct RapLoop {
     // Long-lived arenas (persist across queries).
-    alignas(64) std::uint8_t intern_buf[32 * 1024];
+    alignas(64) std::uint8_t intern_buf[256 * 1024];
     Arena       intern_arena;
     Intern      intern;
     OutcomeSyms syms;
