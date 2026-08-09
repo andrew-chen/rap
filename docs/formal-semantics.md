@@ -352,7 +352,7 @@ The following findings diverge from or supplement comments and documentation
 currently in the repository:
 
 1. **`cons-ops` and client region under sandbox Probe (rap/rap.hpp, Section 5).**
-   After the ChangeSet backtrack fix (`docs/CHANGESET_BACKTRACK_FIX.md`),
+   After the ChangeSet backtrack fix (`docs/historical/specs/CHANGESET_BACKTRACK_FIX.md`),
    `cons-ops` calls inside a sandboxed Probe are fully isolated: both the
    bump-pointer and the `op_count` tracker (`client_region_.client_count`) are
    rewound to their pre-probe values when `probe_run` returns. Sandbox isolation

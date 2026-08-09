@@ -48,7 +48,7 @@ Two properties follow from this design:
 git clone https://github.com/andrew-chen/rap
 cd rap
 make
-./parse_run      # runs 13 example programs
+./parse_run      # runs 18 example programs
 make test        # runs full test suite
 ```
 
@@ -104,21 +104,31 @@ Disequality constraints:
 Reflective agenda reasoning — a query that prunes redundant pending work:
 
 ```scheme
+; subsumeso: strong subsumes weak when both explore the same hypothesis H
+; and strong's depth is at least weak's.
+(defrel (subsumeso strong weak)
+  (fresh (qidS relS qidW relW H dS dW)
+    (== strong (qidS relS (explore H dS)))
+    (== weak   (qidW relW (explore H dW)))
+    (leqo dW dS)))
 
-   (defrel (strengthen-agendao agenda ops)
-     (fresh (H T R strong-qid weak-qids ops0 strong-item)
-       (conj
-         (call membero strong-item agenda)
-         (== strong-item (q strong-qid (check+ H T R)))
-         (call collect-weak-qidso agenda H T weak-qids)
-         (call qids->remove-opso weak-qids ops0)
-         (call cons-ops (output (pruned H T)) ops0 ops))))
+; subsume-and-pruneo: self-directed agenda pruning query. Receives the live
+; agenda at dequeue time, discovers all subsumed explore entries by scanning
+; it relationally, removes them, and reports which qids were pruned.
+(defrel (subsume-and-pruneo agenda args ops)
+  (fresh (subsumed-qids ops0)
+    (conj
+      (find-all-subsumed-qidso agenda agenda subsumed-qids)
+      (qids->remove-opso subsumed-qids ops0)
+      (cons-ops (output (subsume-and-pruneo-ran subsumed-qids)) ops0 ops))))
 ```
 
-Given an agenda containing both `(check H T)` and `(check+ H T R)` entries,
-this relation finds the strong check, collects all superseded weak checks via
-unification, and emits a ChangeSet removing them. It runs correctly under any
-search strategy because the branches are made mutually exclusive using `=/=`.
+Given an agenda containing multiple entries exploring the same hypothesis at
+different depths, `subsume-and-pruneo` identifies every entry subsumed by a
+deeper one — comparing depths via `leqo` — and emits a ChangeSet removing them.
+`find-all-subsumed-qidso` scans the agenda relationally, using `Probe`-based
+`has-subsuming-entryo` for each entry. The `(=/= qidE qidC)` guard in
+`has-subsuming-entryo` ensures an entry is not counted as subsuming itself.
 
 ---
 
@@ -139,17 +149,19 @@ rap/
 │   ├── spine.hpp           # Short-lived Pair nodes for agenda list term
 │   ├── loop.hpp            # Reactive execution loop (RapLoop)
 │   ├── rap.hpp             # RapEvaluator: no-ops, cons-ops, ClientRegion
-│   ├── rap_workquque.hpp   # Rap Work Queue
-│   ├── test_rap.cpp        # Extension mechanism tests
-│   ├── test_rap_extension.cpp # Extension mechanism tests
-│   ├── test_stage2.cpp     # strengthen-agendao validation
+│   ├── work_queue.hpp      # Rap Work Queue (placeholder, not yet implemented)
+│   ├── test_rap.cpp        # Extension mechanism tests (Stage 0B)
+│   ├── test_rap_extension.cpp # RapEvaluator backtrack tests (Stage 0C)
+│   ├── test_stage2.cpp     # subsumeso / subsume-and-pruneo validation
+│   ├── test_loop_additions.cpp # RapLoop::call_main, quiet flag, build_args_term
+│   ├── rap_doctest.cpp     # .rap doctest runner (;;; EXPECT framework)
 │   └── bench_stage2.cpp    # Benchmarking
 
 │
 ├── security/               # Embedded security policy case studies
 │   └── security_test.cpp   # RBAC + network policy, 10/10 correct
 │
-├── parse_run.cpp           # 13 example programs including mutual recursion
+├── parse_run.cpp           # 18 example programs including mutual recursion
 └── Makefile
 ```
 
@@ -189,8 +201,9 @@ straightforward to configure (swap push order in the `Disj` case).
 no alpha-renaming, no variable capture, evaluator stays purely structural.
 
 **Disequality constraints.** `=/=` records constraints in `State.diseqs`
-and checks them after every unification. The `not-weak-check-qido` guard
-in the reflective agenda case study depends on this.
+and checks them after every unification. The `(=/= qidE qidC)` guard in
+`has-subsuming-entryo` (the reflective agenda case study) depends on this —
+it ensures an entry is not counted as subsuming itself.
 
 ---
 
@@ -203,12 +216,14 @@ Measured on Apple M2 Pro, macOS 14.8.3, Apple clang 16.0.0, `-O2`.
 |---|---|
 | Network policy query (structural unification) | 3.6 µs |
 | ACL query (two-step relational join) | 17 µs |
-| `strengthen-agendao` via `run_one()` | 10.7 µs |
+| `subsume-and-pruneo` via `run_one()` (4-entry agenda, 2 removals) | 87 µs |
 | `appendo` forward | 1.54 µs |
 | `appendo` backward | 2.12 µs |
 
 Latency scales with query complexity, not with embedding overhead.
-Simple structural queries are sub-2 µs.
+Simple structural queries are sub-2 µs. `subsume-and-pruneo` uses `Probe`
+twice per agenda entry (for shape-detection and existence checks), which
+accounts for the higher latency relative to simpler structural queries.
 
 ---
 
@@ -218,16 +233,20 @@ Simple structural queries are sub-2 µs.
 make test
 ```
 
-Runs six test binaries:
+Runs eight test binaries:
 
 | Binary | What it tests |
 |---|---|
-| `parse_run` | 13 programs: core relational behavior, anonymous relations, mutual recursion, disequality |
+| `parse_run` | 18 programs: core relational behavior, anonymous relations, mutual recursion, disequality, groundo regression |
 | `security/security_test` | RBAC + network policy, 10/10 correct classifications |
-| `test_rap` | Extension mechanism, RapEvaluator construction |
+| `test_rap` | Extension mechanism, RapEvaluator construction (Stage 0B) |
 | `core_test_extension` | Base Evaluator backtracking, ClientRegion save/restore |
 | `rap_test_extension` | RapEvaluator backtrack rewind, no-ops/cons-ops arity |
-| `test_stage2` | `strengthen-agendao` full case study: Remove(10), Remove(12), Output((pruned hypA test1)) |
+| `test_stage2` | `subsumeso` / `subsume-and-pruneo`: Remove(10), Remove(11), Output((subsume-and-pruneo-ran (10 11))); plus ChangeSet backtrack-safety tests |
+| `test_arith` | Native integer arithmetic (`addo`, `leqo`, `gto`) |
+| `test_loop_additions` | `RapLoop::call_main`, `quiet` flag, `build_args_term` |
+
+Run `make raptests` separately to execute the `.rap` doctest suite (requires running from the project root so `stdlib/core.rap` is found).
 
 ---
 

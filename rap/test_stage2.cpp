@@ -1,5 +1,7 @@
 // rap/test_stage2.cpp
-// Validates the strengthen-agendao case study (paper Section 5.2).
+// Validates subsumeso and subsume-and-pruneo (paper Section 5.2):
+// semantic subsumption and the self-directed agenda pruning query that
+// uses it to remove redundant explore entries from the live agenda.
 // Expected output: PASS: N tests, 0 failures
 //
 // Build from project root:
@@ -8,6 +10,7 @@
 
 #include "loop.hpp"
 #include <cstdio>
+#include <functional>
 
 static int passed = 0;
 static int failed = 0;
@@ -28,14 +31,9 @@ static Term parse_term(RapLoop& loop, Arena& tmp, const char* str) {
 }
 
 // ============================================================================
-// Build a minimal 3-param RelNode with trivial body (== BVar(0) BVar(0)).
-//
-// param_count=3 follows the (agenda args ops) convention: BVar(0)=agenda,
-// BVar(1)=entry's data args, BVar(2)=ops.  The body trivially succeeds and
-// does not bind ops, producing an empty ChangeSet if the entry is ever run.
-// This is deliberately inert — the test's purpose is to verify strengthen-
-// agendao removes the right subset; these entries are just placeholders that
-// won't interfere regardless of dequeue order.
+// Build a minimal inert 3-param RelNode to carry data args in the agenda.
+// Body: (== BVar(0) BVar(0)) — trivially succeeds, produces no ops.
+// param_count=3 satisfies the (agenda args ops) calling convention.
 // ============================================================================
 static Term make_minimal_rel(Arena& stable) {
     Term bv0; bv0.tag = TermTag::BVar; bv0.id = 0;
@@ -47,133 +45,165 @@ static Term make_minimal_rel(Arena& stable) {
 
     RelNode* rn = stable.make<RelNode>();
     if (!rn) return Term::nil();
-    rn->param_count = 3;  // (agenda args ops) — satisfies enqueue's {2,3} check
+    rn->param_count = 3;
     rn->body        = body;
 
     return Term::relation(rn);
 }
 
+// ============================================================================
+// subsumeso / subsume-and-pruneo definitions.
+// Ported verbatim from examples/test_subsume_agenda.rap (verified correct).
+//
+// subsumeso: strong subsumes weak iff both explore the same hypothesis H
+// and strong's depth dS >= weak's depth dW  (equivalently, leqo dW dS).
+//
+// subsume-and-pruneo: self-directed 3-param agenda query. Receives the live
+// agenda at dequeue time, discovers all subsumed explore entries via
+// relational scan, emits Remove ops for each, and outputs which qids were
+// pruned.  The middle "args" parameter is accepted but unused.
+// ============================================================================
+static const char* SUBSUME_DEFS =
+
+    "(defrel (subsumeso strong weak)"
+    "  (fresh (qidS relS qidW relW H dS dW)"
+    "    (== strong (qidS relS (explore H dS)))"
+    "    (== weak (qidW relW (explore H dW)))"
+    "    (leqo dW dS)))"
+
+    "(defrel (is-explore-entryo entry)"
+    "  (fresh (qid rel-term H D)"
+    "    (== entry (qid rel-term (explore H D)))))"
+
+    // has-subsuming-entryo: succeeds iff some OTHER entry in agenda subsumes candidate.
+    // (=/= qidE qidC) ensures an entry is not counted as subsuming itself.
+    "(defrel (has-subsuming-entryo agenda candidate)"
+    "  (fresh (entry rest qidC relC argsC qidE)"
+    "    (== candidate (qidC relC argsC))"
+    "    (== agenda (entry . rest))"
+    "    (disj"
+    "      (fresh (relE argsE)"
+    "        (conj"
+    "          (== entry (qidE relE argsE))"
+    "          (=/= qidE qidC)"
+    "          (subsumeso entry candidate)))"
+    "      (has-subsuming-entryo rest candidate))))"
+
+    // is-subsumedo: converts has-subsuming-entryo into explicit yes/no via Probe
+    // (avoids non-determinism — existence check, not structural match).
+    "(defrel (is-subsumedo agenda candidate result)"
+    "  (disj"
+    "    (conj"
+    "      (probe (has-subsuming-entryo agenda candidate) true 1000 true false)"
+    "      (== result yes))"
+    "    (conj"
+    "      (probe (has-subsuming-entryo agenda candidate) false 1000 true false)"
+    "      (== result no))))"
+
+    // is-explore-entryo-reporto: yes/no wrapper around is-explore-entryo via Probe.
+    // Avoids the groundo bug: testing shape via (=/= entry (qid relE argsE)) with
+    // fresh vars would trivially succeed via deferred constraints regardless of shape.
+    "(defrel (is-explore-entryo-reporto entry result)"
+    "  (disj"
+    "    (conj (probe (is-explore-entryo entry) true 1000 true false)"
+    "          (== result yes))"
+    "    (conj (probe (is-explore-entryo entry) false 1000 true false)"
+    "          (== result no))))"
+
+    "(defrel (find-all-subsumed-qidso agenda full-agenda qids)"
+    "  (disj"
+    "    (conj (== agenda ()) (== qids ()))"
+    "    (fresh (entry rest qid relE argsE tail result is-explore)"
+    "      (conj"
+    "        (== agenda (entry . rest))"
+    "        (is-explore-entryo-reporto entry is-explore)"
+    "        (disj"
+    "          (conj"
+    "            (== is-explore yes)"
+    "            (== entry (qid relE argsE))"
+    "            (is-subsumedo full-agenda entry result)"
+    "            (disj"
+    "              (conj"
+    "                (== result yes)"
+    "                (find-all-subsumed-qidso rest full-agenda tail)"
+    "                (== qids (qid . tail)))"
+    "              (conj"
+    "                (== result no)"
+    "                (find-all-subsumed-qidso rest full-agenda qids))))"
+    "          (conj"
+    "            (== is-explore no)"
+    "            (find-all-subsumed-qidso rest full-agenda qids)))))))"
+
+    "(defrel (qids->remove-opso qids ops)"
+    "  (disj"
+    "    (conj (== qids ()) (no-ops ops))"
+    "    (fresh (qid rest ops-tail)"
+    "      (conj"
+    "        (== qids (qid . rest))"
+    "        (qids->remove-opso rest ops-tail)"
+    "        (cons-ops (remove qid) ops-tail ops)))))"
+
+    "(defrel (subsume-and-pruneo agenda args ops)"
+    "  (fresh (subsumed-qids ops0)"
+    "    (conj"
+    "      (find-all-subsumed-qidso agenda agenda subsumed-qids)"
+    "      (qids->remove-opso subsumed-qids ops0)"
+    "      (cons-ops (output (subsume-and-pruneo-ran subsumed-qids)) ops0 ops))))";
+
 int main() {
 
     RapLoop loop;
+    loop.quiet = true;  // suppress "[output] ..." to keep PASS/FAIL lines readable
     EXPECT(loop.init(), "RapLoop initializes");
     if (failed) { std::printf("\nAborting: init failed.\n"); return 1; }
 
     // -------------------------------------------------------------------------
-    // Load the strengthen-agendao relation definitions.
-    // Agenda entries are now 3-element lists: (id rel-term args).
-    // find-by-contento matches on entry-args directly.
-    // weak-check-qido / not-weak-check-qido destructure (qid rel-term entry-args).
+    // Load subsumeso, subsume-and-pruneo, and all helper relation definitions.
     // -------------------------------------------------------------------------
-    const char* defs =
-        // weak-check-qido: entry is (qid rel-term entry-args), args = (check H T)
-        "(defrel (weak-check-qido entry H T qid)"
-        "  (fresh (rel-term entry-args)"
-        "    (== entry (qid rel-term entry-args))"
-        "    (== entry-args (check H T))))"
-
-        // not-weak-check-qido: entry whose args != (check H T)
-        "(defrel (not-weak-check-qido entry H T)"
-        "  (fresh (qid rel-term entry-args)"
-        "    (== entry (qid rel-term entry-args))"
-        "    (=/= entry-args (check H T))))"
-
-        "(defrel (collect-weak-qidso agenda H T qids)"
-        "  (disj"
-        "    (conj (== agenda ()) (== qids ()))"
-        "    (fresh (entry rest qid tail)"
-        "      (conj"
-        "        (== agenda (entry . rest))"
-        "        (disj"
-        "          (conj"
-        "            (weak-check-qido entry H T qid)"
-        "            (collect-weak-qidso rest H T tail)"
-        "            (== qids (qid . tail)))"
-        "          (conj"
-        "            (not-weak-check-qido entry H T)"
-        "            (collect-weak-qidso rest H T qids)))))))"
-
-        "(defrel (qids->remove-opso qids ops)"
-        "  (disj"
-        "    (conj (== qids ()) (call no-ops ops))"
-        "    (fresh (qid rest ops-tail)"
-        "      (conj"
-        "        (== qids (qid . rest))"
-        "        (call qids->remove-opso rest ops-tail)"
-        "        (call cons-ops (remove qid) ops-tail ops)))))"
-
-        // find-by-contento: matches entry (id rel-term args) where args = pattern
-        "(defrel (find-by-contento agenda pattern id)"
-        "  (fresh (entry rest entry-id entry-rel entry-args)"
-        "    (== agenda (entry . rest))"
-        "    (disj"
-        "      (conj"
-        "        (== entry (entry-id entry-rel entry-args))"
-        "        (== entry-args pattern)"
-        "        (== id entry-id))"
-        "      (find-by-contento rest pattern id))))"
-
-        // strengthen-agendao: find the strong check+ entry via find-by-contento
-        "(defrel (strengthen-agendao agenda ops)"
-        "  (fresh (H T R strong-qid weak-qids ops0)"
-        "    (conj"
-        "      (find-by-contento agenda (check+ H T R) strong-qid)"
-        "      (collect-weak-qidso agenda H T weak-qids)"
-        "      (call qids->remove-opso weak-qids ops0)"
-        "      (call cons-ops (output (pruned H T)) ops0 ops))))";
-
-    EXPECT(loop.load_defs(defs), "Relation definitions load");
+    EXPECT(loop.load_defs(SUBSUME_DEFS), "Relation definitions load");
     if (failed) { std::printf("\nAborting: load_defs failed.\n"); return 1; }
 
     // -------------------------------------------------------------------------
     // Set up the test agenda.
     //
-    // Enqueue strengthen-agendao FIRST (it will be at the front of the FIFO
-    // queue), then set next_id=10 and enqueue the 4 3-param data entries.
-    // All entries are genuinely runnable (no state-holder distinction).
+    // Enqueue subsume-and-pruneo FIRST (it will be at the front of the FIFO
+    // queue), then set next_id=10 and enqueue 4 data entries.
     //
-    // When run_one() dequeues strengthen-agendao (FIFO front), the remaining
-    // agenda presented to it is:
-    //   [id=10: (10 minimal-rel (check  hypA test1)),
-    //    id=11: (11 minimal-rel (check+ hypA test1 refineX)),
-    //    id=12: (12 minimal-rel (check  hypA test1)),
-    //    id=13: (13 minimal-rel (explore hypB 2))]
-    // strengthen-agendao finds id=11 as the strong check+ and emits
-    // Remove(10), Remove(12), Output((pruned hypA test1)).
+    // When run_one() dequeues subsume-and-pruneo (FIFO front), the remaining
+    // agenda it receives is:
+    //   [id=10: minimal-rel args=(explore hypA 1),   ← weak: subsumed by 12
+    //    id=11: minimal-rel args=(explore hypA 2),   ← weak: subsumed by 12
+    //    id=12: minimal-rel args=(explore hypA 3),   ← strong: survives
+    //    id=13: minimal-rel args=(explore hypB 5)]   ← different hyp: survives
     //
-    // Entries 11 and 13 survive (count=2 after run_one). If the reactive loop
-    // were to continue, they would each run and produce empty ChangeSets (their
-    // trivial body succeeds without binding ops) — they're genuinely inert, not
-    // relying on any state-holder mechanism to stay put.
+    // subsume-and-pruneo discovers entries 10 and 11 are each subsumed by
+    // entry 12 (same hypothesis, greater depth) and emits:
+    //   Remove(10), Remove(11), Output((subsume-and-pruneo-ran (10 11)))
+    // Entries 12 and 13 survive (count=2 after apply_changeset).
     // -------------------------------------------------------------------------
 
-    // Enqueue strengthen-agendao first (2-param, nil args).
-    std::uint32_t sa_id = loop.enqueue_query("strengthen-agendao");
-    EXPECT(sa_id != 0u, "strengthen-agendao enqueued");
+    std::uint32_t sa_id = loop.enqueue_query("subsume-and-pruneo");
+    EXPECT(sa_id != 0u, "subsume-and-pruneo enqueued");
     if (failed) { std::printf("\nAborting: enqueue_query failed.\n"); return 1; }
 
-    // Force the 4 data entries to get ids 10-13.
     loop.agenda.next_id = 10;
 
-    // Build content terms using our intern table so symbol pointers match.
     alignas(64) std::uint8_t term_buf[4 * 1024];
     Arena tmp(term_buf, sizeof(term_buf));
 
-    Term content10 = parse_term(loop, tmp, "(check  hypA test1)");
-    Term content11 = parse_term(loop, tmp, "(check+ hypA test1 refineX)");
-    Term content12 = parse_term(loop, tmp, "(check  hypA test1)");
-    Term content13 = parse_term(loop, tmp, "(explore hypB 2)");
+    Term content10 = parse_term(loop, tmp, "(explore hypA 1)");
+    Term content11 = parse_term(loop, tmp, "(explore hypA 2)");
+    Term content12 = parse_term(loop, tmp, "(explore hypA 3)");
+    Term content13 = parse_term(loop, tmp, "(explore hypB 5)");
 
     EXPECT(content10.tag == TermTag::Pair, "content10 parsed");
     EXPECT(content11.tag == TermTag::Pair, "content11 parsed");
     EXPECT(content12.tag == TermTag::Pair, "content12 parsed");
     EXPECT(content13.tag == TermTag::Pair, "content13 parsed");
 
-    // Build a minimal 3-param Rel (agenda args ops) to carry each content term.
-    // The trivial body produces an empty ChangeSet if dequeued and run.
+    // Build an inert 3-param Rel to carry each explore content term.
     Term minimal_rel = make_minimal_rel(loop.intern_arena);
 
-    // Enqueue with content as the middle (args) parameter.
     std::uint32_t id10 = loop.agenda.enqueue(minimal_rel, content10);
     std::uint32_t id11 = loop.agenda.enqueue(minimal_rel, content11);
     std::uint32_t id12 = loop.agenda.enqueue(minimal_rel, content12);
@@ -184,14 +214,14 @@ int main() {
     EXPECT(id12 == 12u, "item12 gets id=12");
     EXPECT(id13 == 13u, "item13 gets id=13");
 
-    // Agenda now: [sa, entry10, entry11, entry12, entry13] — all 5 runnable.
+    // Agenda: [sa, entry10, entry11, entry12, entry13] — all 5 entries.
     EXPECT(loop.agenda.count == 5u, "Agenda has 5 entries before run");
 
     // -------------------------------------------------------------------------
-    // Run strengthen-agendao (FIFO dequeue — it's at the front of the queue).
+    // Run subsume-and-pruneo (FIFO dequeue — at the front of the queue).
     // After execution, expect:
-    //   - ChangeSet: Remove(10), Remove(12), Output((pruned hypA test1))
-    //   - Agenda after apply: entry11 and entry13 remain (count=2)
+    //   - ChangeSet: Remove(10), Remove(11), Output((subsume-and-pruneo-ran (10 11)))
+    //   - Agenda after apply: entry12 and entry13 remain (count=2)
     //   - OutputQueue: 1 term
     // -------------------------------------------------------------------------
     loop.run_one();
@@ -199,28 +229,28 @@ int main() {
     EXPECT(loop.output.count == 1u, "One output term produced");
     EXPECT(loop.agenda.count == 2u, "Two entries remain in agenda");
 
-    // Verify the two remaining entries are id=11 and id=13.
+    // Verify the two remaining entries are id=12 and id=13.
     if (loop.agenda.count == 2) {
         const auto* e0 = reinterpret_cast<const QueryEntry*>(
             loop.agenda.buf + loop.agenda.tail);
         const auto* e1 = reinterpret_cast<const QueryEntry*>(
             loop.agenda.buf + loop.agenda.tail + e0->byte_size);
-        EXPECT(e0->id == 11u, "Remaining entry 0 is id=11");
+        EXPECT(e0->id == 12u, "Remaining entry 0 is id=12");
         EXPECT(e1->id == 13u, "Remaining entry 1 is id=13");
     }
 
-    // Verify the output term is (pruned hypA test1).
+    // Verify the output term is (subsume-and-pruneo-ran (10 11)).
     if (loop.output.count >= 1) {
         Term out = loop.output.terms[0];
         std::printf("Output term: ");
         print_term(out);
         std::printf("\n");
-        // Check structure: car = sym(pruned)
         EXPECT(out.tag == TermTag::Pair, "Output is a pair");
         if (out.tag == TermTag::Pair && out.pair) {
             Term head = out.pair->car;
-            EXPECT(head.tag == TermTag::Sym && sym_lit_eq(head.sym, "pruned"),
-                   "Output head is 'pruned'");
+            EXPECT(head.tag == TermTag::Sym &&
+                   sym_lit_eq(head.sym, "subsume-and-pruneo-ran"),
+                   "Output head is 'subsume-and-pruneo-ran'");
         }
     }
 
@@ -249,6 +279,7 @@ int main() {
         std::uint32_t qid = loop2.enqueue_query("backtrack-test");
         EXPECT(qid != 0u, "Test A: backtrack-test enqueued");
 
+        loop2.quiet = true;
         loop2.run_one();
 
         EXPECT(loop2.output.count == 1u,
@@ -289,6 +320,7 @@ int main() {
         std::uint32_t qid3 = loop3.enqueue_query("probe-test");
         EXPECT(qid3 != 0u, "Test B: probe-test enqueued");
 
+        loop3.quiet = true;
         loop3.run_one();
 
         EXPECT(loop3.output.count == 1u,
@@ -307,16 +339,16 @@ int main() {
     // live entry's args should contain a bare Var node.
     //
     // This directly tests the deep_copy_term overlap fix: before the fix,
-    // a Var(2) appeared in id=45's args after remove() compacted it into a
-    // smaller gap.  The test runs strengthen-agendao (which calls remove
-    // twice: Remove(10) and Remove(12)) and verifies the two surviving
-    // entries (id=11, id=13) have no Var nodes in their args.
+    // a Var(2) appeared in an entry's args after remove() compacted it into
+    // a smaller gap.  The test runs subsume-and-pruneo (which calls remove
+    // twice: Remove(10) and Remove(11)) and verifies the two surviving entries
+    // (id=12, id=13) have no Var nodes in their args.
     //
     // The lambda mimics what --trace's scan_agenda_for_vars does.
     // =========================================================================
     {
         // Re-use the loop from the main test above: after loop.run_one(),
-        // loop.agenda holds entries id=11 and id=13.
+        // loop.agenda holds entries id=12 and id=13.
         bool found_var = false;
 
         std::function<bool(Term)> has_var = [&](Term t) -> bool {

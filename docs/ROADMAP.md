@@ -78,14 +78,14 @@ Workshop paper application. Demonstrates `core/` is genuinely embeddable.
 
 **RapLoop:** Reactive execution loop. Queries are `Rel` terms with `param_count=1` (agenda as single argument). `run_one()` builds agenda list term (spine arena), calls query with it, extracts ChangeSet, applies atomically.
 
-**Search strategy:** DFS (LIFO VM queue) — required for `strengthen-agendao` case study. BFS finds "skip item" branch first (empty result); DFS finds "collect item" branch first (complete result). Trade-off documented in paper Section 4.3.
+**Search strategy:** BFS (FIFO VM queue) — confirmed by `core/core.hpp` line 1562 (`// BFS (FIFO): push g1 first so it is dequeued before g2`). The agenda layer is also FIFO: queries dequeue in the order they were added, which is what gives `subsume-and-pruneo` priority when seeded first by `main`.
 
 **Bugs found and fixed during implementation:**
 - `RestoreEnv` continuation tag — callee's env must not leak into caller's continuation goals
 - `deep_resolve_bvar` for compound args before `handleUnknownRelation`
 - `save src before deep_copy_term` in `remove()` — prevents header corruption when copy destination overlaps source
 
-**Validation:** `test_stage2` passes 18/18. `strengthen-agendao` produces Remove(10), Remove(12), Output((pruned hypA test1)) on 4-entry test agenda.
+**Validation:** `test_stage2` passes 29/29. `subsume-and-pruneo` produces Remove(10), Remove(11), Output((subsume-and-pruneo-ran (10 11))) on 4-entry test agenda (entries id=12 and id=13 survive).
 
 **Spec:** `docs/STAGE_2.md`
 
@@ -110,17 +110,15 @@ Workshop paper application. Demonstrates `core/` is genuinely embeddable.
 ## Future Work (Post-Paper)
 
 **Near-term:**
-- `.rap` doctest runner (`rap_doctest.cpp`): parse `;;; ARGS:` / `;;; EXPECT` /
-  `;;; END EXPECT` blocks from `.rap` files, drive `RapLoop::call_main` and
-  `run_until_empty()`, compare output terms.  `RapLoop::quiet`, `call_main`, and
-  `build_args_term` are already implemented and tested (`rap/test_loop_additions.cpp`);
-  example test files live in `tests/`.  Blocked on `terms_equal` (see below).
-- `terms_equal` for cross-intern-table comparison: structural equality using
-  `SymEntry::str` / `SymEntry::len` (via `bytes_eq`) rather than pointer identity,
-  so terms parsed from `;;; EXPECT` blocks and terms produced by `call_main` can
-  be compared even though they were interned into different tables.  Rel terms
-  (`TermTag::Rel`) cannot be compared meaningfully and should be forbidden in
-  `EXPECT` blocks.
+- `.rap` doctest runner: **implemented** (`rap/rap_doctest.cpp`, `make raptests`).
+  Parses `;;; ARGS:` / `;;; EXPECT` / `;;; END EXPECT` markers, drives
+  `RapLoop::call_main` and `run_until_empty()`, and compares output terms via
+  `terms_equal` (structural equality using `SymEntry::str`/`len` via `bytes_eq`).
+  Three fixture tests in `tests/`.  Stdlib loaded via three-step fallback
+  (`--stdlib PATH` → `stdlib/core.rap` relative to cwd → visible warning + continue).
+- Migrate `examples/test_*.rap` files into `tests/` with `;;; EXPECT` blocks —
+  these already have "Expected output:" comments; converting them makes the full
+  test ladder machine-checked rather than aspirational.
 - Amortized growth for fixed-size arenas
 - True circular buffer wraparound for Queue 2 (currently OOM on wrap; compaction would need two-pass or back-to-front approach)
 - Hash table for `RelEnv`
