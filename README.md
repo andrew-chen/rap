@@ -171,7 +171,6 @@ rap/
 │   ├── spine.hpp               # Short-lived Pair nodes for agenda list term
 │   ├── loop.hpp                # Reactive execution loop (RapLoop)
 │   ├── rap.hpp                 # RapEvaluator: no-ops, cons-ops, ClientRegion
-│   ├── work_queue.hpp          # Rap Work Queue (stub — not yet implemented)
 │   ├── test_rap.cpp            # Extension mechanism tests (Stage 0B)
 │   ├── test_rap_extension.cpp  # RapEvaluator backtrack tests (Stage 0C)
 │   ├── test_stage2.cpp         # subsumeso / subsume-and-pruneo validation
