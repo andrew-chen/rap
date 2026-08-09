@@ -1,7 +1,8 @@
 # RAP — Relational Agenda Programming
 
 A C++20 logic programming engine designed for embedding in systems software.
-Zero dependencies. Header-only. Callable via FFI from any language.
+Zero dependencies. Header-only library (`core/` and `rap/`). Callable via
+FFI from any language.
 
 > **Papers:** This codebase supports two papers currently under review:
 > - "Relational Agenda Programming: A Uniform Execution Model for
@@ -32,13 +33,40 @@ flow through the same uniform machinery — no privileged escape hatches.
 Two properties follow from this design:
 
 - **ChangeSet validity by construction.** ChangeSets are built using two
-  relations — `no-ops` and `cons-ops` — where `cons-ops` fails on invalid
-  operations. Any successfully constructed ChangeSet is valid. No runtime
-  validation step is needed.
+  relations — `no-ops` and `cons-ops` — where `cons-ops` fails on syntactically
+  invalid operations. The guarantee is structural: every operation in a
+  successfully constructed ChangeSet is well-formed (`add`, `remove`, or `output`
+  with the correct shape). A `remove` for an id no longer present in the agenda
+  is well-formed and simply has no effect.
 
 - **Reflective agenda reasoning.** A query can inspect pending work, detect
   redundancy via unification, and emit a ChangeSet pruning it. This is not
   an API feature — it falls out of the agenda being a term.
+
+---
+
+## Contributions
+
+Three separable contributions:
+
+- **An embeddable C++20 relational core.** A zero-dependency, arena-based
+  µKanren implementation extended with anonymous relations, disequality
+  constraints, and `Probe`. The `security/` case studies use it standalone,
+  without the agenda layer.
+
+- **`Probe`: bounded meta-evaluation.** A primitive that runs a sub-goal to
+  completion within a step budget and returns one of four outcomes —
+  `true` / `false` / `bounded` / `insufficient` — integrated into the core
+  evaluator. This lets you distinguish finite failure from budget exhaustion,
+  and ground-check failures from logical failures, all within a single uniform
+  mechanism.
+
+- **Relational agenda programming.** A reactive execution model in which the
+  pending-query agenda is a first-class relational term. Queries receive the
+  live agenda, reason over it using the same unification machinery used for
+  domain reasoning, and return a ChangeSet specifying atomic agenda
+  modifications. Control flow, domain reasoning, and I/O all flow through the
+  same machinery — no privileged escape hatches.
 
 ---
 
@@ -72,11 +100,21 @@ To explore with a variable seed, use the with-args variant, which takes a single
 echo "" | ./raprunner examples/memory/memory_stage3_0_with_args.rap a
 ```
 
-**Prerequisites:** A C++20 compiler (`clang++` or `g++`). The core engine, all test binaries, and `parse_run` have no other dependencies. `raprunner` additionally requires POSIX headers (`unistd.h`, `poll.h`, `sys/types.h`); it compiles on Linux and macOS but requires a compatibility layer on Windows. The timing analysis scripts (if used) require Python 3, but Python is not needed for any part of the build or test suite.
+**Prerequisites:** A C++20 compiler (`clang++` or `g++`). The core engine, all test binaries, and `parse_run` have no other dependencies. `raprunner` additionally requires POSIX headers (`unistd.h`, `poll.h`, `sys/types.h`); it compiles on Linux and macOS but requires a compatibility layer on Windows (WSL is recommended). The timing analysis scripts (if used) require Python 3, but Python is not needed for any part of the build or test suite.
 
 ---
 
-## A Taste of the Language
+## A Taste of RAP
+
+The most distinctive feature of RAP is that queries can reason over and
+reshape the live agenda. As a preview — from
+`examples/memory/component_tests/test_subsume_agenda.rap`:
+
+```scheme
+; Before: (explore hypA 1)[id=2], (explore hypA 2)[id=3],
+;         (explore hypA 3)[id=4], (explore hypB 5)[id=5]
+; id=4 subsumes ids 2 and 3 (same hypothesis, greater depth) → output: (subsume-and-pruneo-ran (2 3))
+```
 
 The surface syntax is s-expressions. Here is `appendo` running forward and
 backward in the same program:
@@ -105,11 +143,27 @@ Mutual recursion via first-class anonymous relations:
 ; => (0 (s (s 0)) (s (s (s (s 0)))) ...)
 ```
 
-Bounded meta-evaluation with `Probe` — the engine's novel primitive:
+Bounded meta-evaluation with `Probe` — the engine's novel primitive. A real
+example from `security/security_test.cpp`: does `sensor-node-7` have `read`
+access to `sensor-data`?
 
 ```scheme
-; succeeds if the sub-goal finitely fails within 100 steps
-(probe (call some-goal x) false 100 true false)
+(run 1 (q)
+  (probe
+    (fresh (r)
+      (conj
+        (disj (== (list role sensor-node-7 sensor)   (list role sensor-node-7 r))
+              (== (list role gateway-node-1  gateway) (list role sensor-node-7 r))
+              ...)
+        (disj (== (list allow sensor  read sensor-data) (list allow r read sensor-data))
+              (== (list allow gateway read sensor-data) (list allow r read sensor-data))
+              ...)
+        (== q r)))
+    true 100 true false))
+; true    → PERMITTED (matching role-permission chain found)
+; false   → DENIED (no matching chain exists, proved)
+; bounded → budget exhausted without proof (indeterminate)
+; insufficient → n/a at runtime: ReqGround=false and all inputs are ground
 ```
 
 Disequality constraints:
@@ -179,7 +233,7 @@ rap/
 │   └── bench_stage2.cpp        # Benchmarking
 │
 ├── security/                   # Embedded security policy case studies
-│   ├── security_test.cpp       # RBAC + network policy, 10/10 correct
+│   ├── security_test.cpp       # Access control + network policy, 10/10 correct
 │   └── bench.cpp               # Parse-vs-evaluation timing benchmark
 │
 ├── stdlib/                     # Standard library of relational definitions
@@ -211,6 +265,18 @@ the RAP layer — the security case studies depend only on `core/`.
 Client state (the ChangeSet being accumulated) lives in a `ClientRegion` whose
 bump pointer is saved and restored with `State` on backtrack — making
 ChangeSet construction automatically backtrack-safe.
+
+```
+Host program
+    │
+    └─uses──▶  RapLoop  ──drives──▶  RapEvaluator
+                                           │
+                                     inherits (one virtual override:
+                                     handleUnknownRelation)
+                                           │
+                                           ▼
+                                      core::Evaluator
+```
 
 ---
 
@@ -244,6 +310,25 @@ it ensures an entry is not counted as subsuming itself.
 
 ---
 
+## When Not to Use RAP
+
+Three known limitations:
+
+- **Fixed-size arenas.** Every arena is allocated once from a caller-supplied
+  buffer. If you cannot bound query-space memory at configuration time, there
+  is no heap fallback.
+
+- **Bounded negation, not relational negation.** `(probe Goal false Budget ...)`
+  detects finite failure within a budget. If the goal explores a deep search
+  space and the budget is tight, `Probe` returns `bounded` rather than `false`
+  — the query is indeterminate, not conclusively negative.
+
+- **No whole-agenda liveness guarantee.** A query can inspect and prune the
+  current agenda snapshot, but the system provides no global termination
+  guarantee. A query that grows the agenda without bound runs forever.
+
+---
+
 ## Performance
 
 Measured on Apple M2 Pro, macOS 14.8.3, Apple clang 16.0.0, `-O2`.
@@ -257,7 +342,9 @@ Measured on Apple M2 Pro, macOS 14.8.3, Apple clang 16.0.0, `-O2`.
 | `appendo` forward | 1.54 µs |
 | `appendo` backward | 2.12 µs |
 
-Latency scales with query complexity, not with embedding overhead.
+The network policy and ACL queries run against `core/` only — no agenda
+layer — demonstrating the standalone embedding cost. Latency scales with
+query complexity, not with embedding overhead.
 Simple structural queries are sub-2 µs. `subsume-and-pruneo` uses `Probe`
 twice per agenda entry (for shape-detection and existence checks), which
 accounts for the higher latency relative to simpler structural queries.
@@ -275,7 +362,7 @@ Runs eight test binaries:
 | Binary | What it tests |
 |---|---|
 | `parse_run` | 18 programs: core relational behavior, anonymous relations, mutual recursion, disequality, groundo regression |
-| `security/security_test` | RBAC + network policy, 10/10 correct classifications |
+| `security/security_test` | Access control + network policy, 10/10 correct classifications |
 | `test_rap` | Extension mechanism, RapEvaluator construction (Stage 0B) |
 | `core_test_extension` | Base Evaluator backtracking, ClientRegion save/restore |
 | `rap_test_extension` | RapEvaluator backtrack rewind, no-ops/cons-ops arity |
