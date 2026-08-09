@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <memory>
 #include <new>
+#include <string>
+#include <vector>
 
 constexpr std::uint32_t MAX_OUTPUT_TERMS = 256;
 constexpr std::uint32_t EVAL_ARENA_SIZE  = 1024 * 1024 * 1024;  
@@ -60,6 +62,11 @@ struct RapLoop {
     Agenda      agenda;
     SpineArena  spine;
     OutputQueue output;
+
+    // When true, apply_changeset does not print "[output] ..." to stdout for
+    // each Output op.  Output terms are still collected into output.terms[].
+    // Default is false (preserving prior behavior for all existing callers).
+    bool quiet = false;
 
     // Relation environment (populated by load_defs).
     RelEnv rel_env;
@@ -182,6 +189,67 @@ struct RapLoop {
         return agenda.enqueue(rel_term, Term::nil());
     }
 
+    // Build the args list term (agenda, args, ops) from a vector of C strings.
+    // Each string is interned into intern_arena and consed into a Pair-list
+    // in the same order: ["a", "b"] → (a . (b . nil)).
+    // Allocation goes into intern_arena (never reset) so the term is stable
+    // across call_main's internal eval_arena.reset().
+    Term build_args_term(const std::vector<std::string>& args) {
+        Term result = Term::nil();
+        for (int i = static_cast<int>(args.size()) - 1; i >= 0; --i) {
+            const SymEntry* s =
+                intern_cstr(intern_arena, intern, args[static_cast<std::size_t>(i)].c_str());
+            if (!s) return Term::nil();
+            PairNode* p = intern_arena.make<PairNode>();
+            if (!p) return Term::nil();
+            p->car = Term::symbol(s);
+            p->cdr = result;
+            result = Term::make_pair(p);
+        }
+        return result;
+    }
+
+    // Bootstrap the agenda by calling main(args_term, ops).
+    // Looks up "main" in rel_env, calls it with the provided args term, and
+    // applies the resulting ChangeSet to seed the agenda.  Returns true on
+    // success, false if "main" is undefined, has the wrong arity, or fails.
+    //
+    // Mirrors raprunner.cpp's static call_main() but as a RapLoop method so
+    // test drivers and the .rap doctest runner can call it directly.
+    bool call_main(Term args_term = Term::nil()) {
+        if (!evaluator) return false;
+
+        const SymEntry* main_sym = intern_cstr(intern_arena, intern, "main");
+        if (!main_sym) return false;
+        Term main_rel = rel_env.lookup(main_sym);
+        if (main_rel.tag != TermTag::Rel) return false;
+        if (main_rel.rel->param_count != 2) return false;
+
+        evaluator->init_changeset();
+
+        Term call_args[2];
+        call_args[0] = args_term;
+        call_args[1] = Term::var(0);
+
+        Goal* call_goal = eval_arena.make<Goal>();
+        if (!call_goal) { eval_arena.reset(); return false; }
+        call_goal->tag  = GoalTag::Call;
+        call_goal->call = GoalCall{main_rel, call_args, 2};
+
+        bool succeeded = false;
+        evaluator->runN(1, call_goal, Term::var(0), 1, rel_env,
+                        [&](Term, State) { succeeded = true; });
+
+        if (!succeeded) { eval_arena.reset(); return false; }
+
+        evaluator->sync_changeset_op_count();
+        ChangeSet* cs = evaluator->get_changeset();
+        if (cs) apply_changeset(*cs);
+
+        eval_arena.reset();
+        return true;
+    }
+
     // Run until the agenda is empty.
     void run_until_empty(std::uint32_t max_steps = 10000) {
         for (std::uint32_t s = 0; s < max_steps && !agenda.empty(); ++s)
@@ -278,9 +346,11 @@ private:
                     // Term remains valid after eval_arena is reset below.
                     Term stable = deep_copy_term(intern_arena, op.output_term);
                     output.push(stable);
-                    std::printf("[output] ");
-                    print_term(stable);
-                    std::printf("\n");
+                    if (!quiet) {
+                        std::printf("[output] ");
+                        print_term(stable);
+                        std::printf("\n");
+                    }
                     break;
                 }
             }

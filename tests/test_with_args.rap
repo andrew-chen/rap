@@ -1,0 +1,20 @@
+; tests/test_with_args.rap — doctest using ;;; ARGS to pass a CLI argument.
+;
+; Run manually: echo "" | ./raprunner tests/test_with_args.rap hello
+;
+; The ARGS line tells the doctest runner to pass "hello" as the first
+; element of the args list when calling main.
+
+(defrel (main args ops)
+  (fresh (a)
+    (conj
+      (== args (a))
+      (cons-ops (output (got a)) (no-ops) ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
+
+;;; ARGS: hello
+;;; EXPECT
+;;; (got hello)
+;;; END EXPECT

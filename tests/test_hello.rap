@@ -1,0 +1,13 @@
+; tests/test_hello.rap — minimal doctest: single output, no ARGS.
+;
+; Run manually: echo "" | ./raprunner tests/test_hello.rap
+
+(defrel (main args ops)
+  (cons-ops (output (hello world)) (no-ops) ops))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
+
+;;; EXPECT
+;;; (hello world)
+;;; END EXPECT

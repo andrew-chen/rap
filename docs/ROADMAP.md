@@ -110,6 +110,17 @@ Workshop paper application. Demonstrates `core/` is genuinely embeddable.
 ## Future Work (Post-Paper)
 
 **Near-term:**
+- `.rap` doctest runner (`rap_doctest.cpp`): parse `;;; ARGS:` / `;;; EXPECT` /
+  `;;; END EXPECT` blocks from `.rap` files, drive `RapLoop::call_main` and
+  `run_until_empty()`, compare output terms.  `RapLoop::quiet`, `call_main`, and
+  `build_args_term` are already implemented and tested (`rap/test_loop_additions.cpp`);
+  example test files live in `tests/`.  Blocked on `terms_equal` (see below).
+- `terms_equal` for cross-intern-table comparison: structural equality using
+  `SymEntry::str` / `SymEntry::len` (via `bytes_eq`) rather than pointer identity,
+  so terms parsed from `;;; EXPECT` blocks and terms produced by `call_main` can
+  be compared even though they were interned into different tables.  Rel terms
+  (`TermTag::Rel`) cannot be compared meaningfully and should be forbidden in
+  `EXPECT` blocks.
 - Amortized growth for fixed-size arenas
 - True circular buffer wraparound for Queue 2 (currently OOM on wrap; compaction would need two-pass or back-to-front approach)
 - Hash table for `RelEnv`

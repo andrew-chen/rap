@@ -1,0 +1,19 @@
+; tests/test_multi.rap — doctest with multiple output lines.
+;
+; Run manually: echo "" | ./raprunner tests/test_multi.rap
+
+(defrel (main args ops)
+  (fresh (ops0 ops1)
+    (conj
+      (cons-ops (output (line one))   (no-ops) ops0)
+      (cons-ops (output (line two))   ops0     ops1)
+      (cons-ops (output (line three)) ops1     ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
+
+;;; EXPECT
+;;; (line one)
+;;; (line two)
+;;; (line three)
+;;; END EXPECT
