@@ -60,3 +60,5 @@ test_rap
 security/security_test
 raprunner
 repl
+test_arith
+test_loop_additions
