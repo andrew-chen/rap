@@ -1,5 +1,5 @@
-; examples/wc.rap — character, word, and line counter
-; Run: echo "some text" | ./raprunner examples/wc.rap
+; examples/demos/wc.rap — character, word, and line counter
+; Run: echo "some text" | ./raprunner examples/demos/wc.rap
 ;
 ; Design: wc-counter is the authoritative state carrier and the only entity
 ; that counts characters.  handle_input delivers raw bytes; wc-counter counts

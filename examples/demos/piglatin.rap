@@ -1,10 +1,10 @@
-; examples/piglatin.rap — pig latin translator
+; examples/demos/piglatin.rap — pig latin translator
 ; Input is a character list. Commands:
 ;   t o SPACE letters NEWLINE  — translate word to pig latin
 ;   f r o m SPACE letters NEWLINE — translate from pig latin back to original
 ;
 ; Pig latin: move first letter to end, append (a y).
-; Run: ./raprunner examples/piglatin.rap
+; Run: ./raprunner examples/demos/piglatin.rap
 
 ; Take the leading alpha characters from a char list
 (defrel (span-alphao lst alpha rest)

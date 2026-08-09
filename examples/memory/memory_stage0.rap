@@ -37,7 +37,7 @@
 ; Comments placed after all definitions are never dispatched at all
 ; (the accumulator is simply dropped at EOF), so they are safe here.
 ;
-; Usage: ./repl < examples/memory_stage0.rap
+; Usage: ./repl < examples/memory/memory_stage0.rap
 ; (stdlib/core.rap loads automatically before this file's contents)
 ;
 ; CORRECTED relative to memory_stage1.rap: the recursive call in the

@@ -1,4 +1,4 @@
-; examples/celsius.rap — temperature name to Fahrenheit lookup
+; examples/demos/celsius.rap — temperature name to Fahrenheit lookup
 ; Demonstrates: bidirectional relations, character-list command parsing.
 ;
 ; Input: character lists. Commands:
@@ -6,7 +6,7 @@
 ;   f SPACE name-chars NEWLINE — look up name, output Fahrenheit value (labeled f)
 ;
 ; Temperature names are matched as character sequences.
-; Run: ./raprunner examples/celsius.rap
+; Run: ./raprunner examples/demos/celsius.rap
 
 ; Lookup table: char-list name <-> Fahrenheit integer
 (defrel (tempo name-chars f)

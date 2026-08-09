@@ -1,6 +1,6 @@
-; examples/echo.rap — echo server
+; examples/demos/echo.rap — echo server
 ; Each block of input is echoed back as a character list term.
-; Run: ./raprunner examples/echo.rap
+; Run: ./raprunner examples/demos/echo.rap
 
 (defrel (main args ops)
   (call no-ops ops))

@@ -1,6 +1,6 @@
-; examples/hello.rap — hello world
+; examples/demos/hello.rap — hello world
 ; Outputs the character list (h e l l o - w o r l d) and ignores input.
-; Run: ./raprunner examples/hello.rap < /dev/null
+; Run: ./raprunner examples/demos/hello.rap < /dev/null
 
 (defrel (main args ops)
   (call cons-ops

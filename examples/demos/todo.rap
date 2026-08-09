@@ -1,4 +1,4 @@
-; examples/todo.rap — interactive to-do list
+; examples/demos/todo.rap — interactive to-do list
 ; Demonstrates: published args for item storage, find-by-contento, add/remove ops.
 ;
 ; Commands (as character lists):
@@ -7,7 +7,7 @@
 ;   l i s t NEWLINE                  — list all items
 ;
 ; Items are stored as state-holding agenda entries with args = (todo item-chars).
-; Run: ./raprunner examples/todo.rap
+; Run: ./raprunner examples/demos/todo.rap
 
 ; Collect all item values from entries whose published args match (todo item).
 (defrel (collect-todoso agenda items)
