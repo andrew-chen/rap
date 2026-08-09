@@ -53,7 +53,7 @@ static Term make_minimal_rel(Arena& stable) {
 
 // ============================================================================
 // subsumeso / subsume-and-pruneo definitions.
-// Ported verbatim from examples/test_subsume_agenda.rap (verified correct).
+// Ported verbatim from examples/memory/component_tests/test_subsume_agenda.rap (verified correct).
 //
 // subsumeso: strong subsumes weak iff both explore the same hypothesis H
 // and strong's depth dS >= weak's depth dW  (equivalently, leqo dW dS).

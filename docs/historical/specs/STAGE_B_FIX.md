@@ -5,7 +5,7 @@
              commit `520b1f6`)  
 **Modifies:** `rap/agenda.hpp`, `rap/changeset.hpp`, `rap/rap.hpp`,
              `rap/loop.hpp`, `core/core.hpp`, `stdlib/core.rap`,
-             `rap/test_stage2.cpp`, `examples/todo.rap`, `examples/wc.rap`  
+             `rap/test_stage2.cpp`, `examples/demos/todo.rap`, `examples/demos/wc.rap`  
 **Status:** Specification — not yet implemented  
 **Date:** June 2026
 
@@ -313,13 +313,13 @@ a buried unbound variable, which must fail.]**
 
 ## Part 5: Rewrite wc.rap as a Self-Perpetuating Query
 
-`examples/wc.rap` currently keeps a bare `(wc-state chars words lines
+`examples/demos/wc.rap` currently keeps a bare `(wc-state chars words lines
 in-word)` data entry on the agenda. Under the Part 2 invariant, this
 is no longer permitted — rewrite it as a self-perpetuating `Rel` that
 carries its own state as closed-over arguments.
 
 ```scheme
-; examples/wc.rap — character, word, and line counter
+; examples/demos/wc.rap — character, word, and line counter
 ; State (chars, words, lines, in-word) is carried as closed-over
 ; arguments of a self-perpetuating query, not as bare agenda data.
 

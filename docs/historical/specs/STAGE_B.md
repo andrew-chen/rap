@@ -3,9 +3,9 @@
 **Version:** 1.0  
 **Depends on:** STAGE_ARITH complete, REPL complete, raprunner complete  
 **Modifies:** `raprunner.cpp`, `repl.cpp`  
-**New files:** `stdlib/core.rap`, `examples/hello.rap`, `examples/echo.rap`,
-              `examples/piglatin.rap`, `examples/celsius.rap`,
-              `examples/todo.rap`, `examples/wc.rap`  
+**New files:** `stdlib/core.rap`, `examples/demos/hello.rap`, `examples/demos/echo.rap`,
+              `examples/demos/piglatin.rap`, `examples/demos/celsius.rap`,
+              `examples/demos/todo.rap`, `examples/demos/wc.rap`  
 **Status:** Specification — not yet implemented  
 **Date:** May 2026
 
@@ -279,12 +279,12 @@ Since stdlib is loaded automatically, examples may use `membero`,
 `appendo`, `addo`, `digitcharo`, `spacecharo`, etc. without
 re-defining them.
 
-### examples/hello.rap
+### examples/demos/hello.rap
 
 ```scheme
-; examples/hello.rap — hello world
+; examples/demos/hello.rap — hello world
 ; Outputs (h e l l o - w o r l d) and does nothing with input.
-; Run: ./raprunner examples/hello.rap < /dev/null
+; Run: ./raprunner examples/demos/hello.rap < /dev/null
 
 (defrel (main args ops)
   (call cons-ops
@@ -296,12 +296,12 @@ re-defining them.
   (call no-ops ops))
 ```
 
-### examples/echo.rap
+### examples/demos/echo.rap
 
 ```scheme
-; examples/echo.rap — echo server
+; examples/demos/echo.rap — echo server
 ; Each block of input is echoed back as a character list term.
-; Run: ./raprunner examples/echo.rap
+; Run: ./raprunner examples/demos/echo.rap
 
 (defrel (main args ops)
   (call no-ops ops))
@@ -310,14 +310,14 @@ re-defining them.
   (call cons-ops (output input) (no-ops) ops))
 ```
 
-### examples/wc.rap
+### examples/demos/wc.rap
 
 ```scheme
-; examples/wc.rap — character, word, and line counter
+; examples/demos/wc.rap — character, word, and line counter
 ; Demonstrates: charo, character classification, stateful agenda.
 ; State is kept as (wc-state chars words lines in-word) in the agenda.
 ;
-; Run: ./raprunner examples/wc.rap < somefile.txt
+; Run: ./raprunner examples/demos/wc.rap < somefile.txt
 
 ; Count one character: update chars, words, lines, in-word flag
 (defrel (count-charo c chars words lines in-word
@@ -395,10 +395,10 @@ character classification logic using the stdlib relations and test
 it works. The intent is to demonstrate stateful agenda reasoning
 with character classification, not to provide a production `wc`.
 
-### examples/piglatin.rap
+### examples/demos/piglatin.rap
 
 ```scheme
-; examples/piglatin.rap — pig latin translator
+; examples/demos/piglatin.rap — pig latin translator
 ; Input is a character list. Words are sequences of alpha characters.
 ; Pig latin: move first letter to end, append (a y).
 ;
@@ -406,7 +406,7 @@ with character classification, not to provide a production `wc`.
 ;   t o SPACE l e t t e r s NEWLINE  — translate to pig latin
 ;   f r o m SPACE l e t t e r s NEWLINE — translate from pig latin
 ;
-; Run: ./raprunner examples/piglatin.rap
+; Run: ./raprunner examples/demos/piglatin.rap
 
 ; Split a char list into head chars matching pred and a tail
 (defrel (span-alphao lst alpha rest)
@@ -481,15 +481,15 @@ example is to show character-level pattern matching — the exact
 implementation details should be cleaned up to use stdlib
 consistently.
 
-### examples/celsius.rap
+### examples/demos/celsius.rap
 
 ```scheme
-; examples/celsius.rap — temperature converter
+; examples/demos/celsius.rap — temperature converter
 ; Demonstrates: bidirectional relations, character-list command parsing.
 ; Input: character lists. Commands are word-level after splitting on spaces.
 ;
 ; Conversion table: named temperature <-> Fahrenheit integer
-; Run: ./raprunner examples/celsius.rap
+; Run: ./raprunner examples/demos/celsius.rap
 
 (defrel (tempo name f)
   (disj
@@ -561,10 +561,10 @@ bidirectionally. The input parsing extracts the command character and
 the argument. Claude Code should clean up the `val` / `val-chars`
 distinction and make the fahrenheit lookup work correctly.
 
-### examples/todo.rap
+### examples/demos/todo.rap
 
 ```scheme
-; examples/todo.rap — interactive to-do list
+; examples/demos/todo.rap — interactive to-do list
 ; Demonstrates: stateful agenda, character-list command parsing,
 ; add/remove ChangeSet operations.
 ;
@@ -574,7 +574,7 @@ distinction and make the fahrenheit lookup work correctly.
 ;   l i s t NEWLINE                    — list all items
 ;
 ; Items are stored as (todo <char-list>) in the agenda.
-; Run: ./raprunner examples/todo.rap
+; Run: ./raprunner examples/demos/todo.rap
 
 ; Split input into command word and argument chars
 (defrel (split-cmdo input cmd-chars arg-chars)
@@ -734,9 +734,9 @@ a trivial input as a smoke test:
 
 ```makefile
 examples: raprunner repl
-	echo "" | ./raprunner examples/hello.rap
-	echo "hello world" | ./raprunner examples/echo.rap
-	echo "" | ./raprunner examples/wc.rap
+	echo "" | ./raprunner examples/demos/hello.rap
+	echo "hello world" | ./raprunner examples/demos/echo.rap
+	echo "" | ./raprunner examples/demos/wc.rap
 	@echo "Examples smoke test passed."
 ```
 
@@ -751,15 +751,15 @@ examples: raprunner repl
 - [ ] `load_stdlib` added to both `repl.cpp` and `raprunner.cpp`
 - [ ] stdlib loaded before user code in both tools
 - [ ] `RAP_STDLIB` environment variable respected
-- [ ] `examples/hello.rap` updated
-- [ ] `examples/echo.rap` updated (character list output)
-- [ ] `examples/wc.rap` created
-- [ ] `examples/piglatin.rap` rewritten for character-list input
-- [ ] `examples/celsius.rap` rewritten for character-list input
-- [ ] `examples/todo.rap` rewritten for character-list input
+- [ ] `examples/demos/hello.rap` updated
+- [ ] `examples/demos/echo.rap` updated (character list output)
+- [ ] `examples/demos/wc.rap` created
+- [ ] `examples/demos/piglatin.rap` rewritten for character-list input
+- [ ] `examples/demos/celsius.rap` rewritten for character-list input
+- [ ] `examples/demos/todo.rap` rewritten for character-list input
 - [ ] `make test` still passes
 - [ ] `make examples` smoke test passes (or equivalent manual test)
-- [ ] Echo: `echo "hello" | ./raprunner examples/echo.rap`
+- [ ] Echo: `echo "hello" | ./raprunner examples/demos/echo.rap`
       outputs the character list `(h e l l o \n)` or similar
 - [ ] Pig latin: typing `to hello` translates correctly
 - [ ] REPL: stdlib relations available at startup

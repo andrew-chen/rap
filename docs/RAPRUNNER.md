@@ -358,7 +358,7 @@ application, not a test binary.
 ## Example Program: Echo Server
 
 ```scheme
-; examples/echo.rap
+; examples/demos/echo.rap
 
 (defrel (main args ops)
   (call no-ops ops))
@@ -367,7 +367,7 @@ application, not a test binary.
   (call cons-ops (output input) (no-ops) ops))
 ```
 
-Run with: `./raprunner examples/echo.rap`
+Run with: `./raprunner examples/demos/echo.rap`
 
 Each line typed is echoed back via the output queue.
 
@@ -420,7 +420,7 @@ These are reused directly by raprunner's program loader.
 - [ ] `--fd N` adds additional watched fds
 - [ ] EOF on non-stdin fd removes it from watch set
 - [ ] Multiple fds: fd integer correctly identifies source in handle_input
-- [ ] Echo example (`examples/echo.rap`) works correctly
+- [ ] Echo example (`examples/demos/echo.rap`) works correctly
 - [ ] `make test` still passes (no regressions)
 - [ ] `raprunner` added to `all` in Makefile
 

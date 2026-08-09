@@ -10,7 +10,7 @@
              specified) and the unresolved Part 5 integration question  
 **Modifies:** `core/mktypes.hpp`, `core/core.hpp`, `core/sexp_parser.hpp`,
              `stdlib/core.rap`, `rap/test_stage2.cpp`,
-             `examples/todo.rap`, `examples/wc.rap`  
+             `examples/demos/todo.rap`, `examples/demos/wc.rap`  
 **Status:** Specification — not yet implemented  
 **Date:** June 2026
 
@@ -304,7 +304,7 @@ the fixed entry point and is responsible for locating the live
 wc-counter entry via `find-by-contento` + `rel-argso`.
 
 ```scheme
-; examples/wc.rap
+; examples/demos/wc.rap
 
 (defrel (count-charo c chars words lines in-word
                        chars1 words1 lines1 in-word1)

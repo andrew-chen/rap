@@ -116,7 +116,7 @@ Workshop paper application. Demonstrates `core/` is genuinely embeddable.
   `terms_equal` (structural equality using `SymEntry::str`/`len` via `bytes_eq`).
   Three fixture tests in `tests/`.  Stdlib loaded via three-step fallback
   (`--stdlib PATH` → `stdlib/core.rap` relative to cwd → visible warning + continue).
-- Migrate `examples/test_*.rap` files into `tests/` with `;;; EXPECT` blocks —
+- Migrate `examples/memory/component_tests/test_*.rap` files into `tests/` with `;;; EXPECT` blocks —
   these already have "Expected output:" comments; converting them makes the full
   test ladder machine-checked rather than aspirational.
 - Amortized growth for fixed-size arenas

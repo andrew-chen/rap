@@ -468,7 +468,7 @@ re-discovering:
   agenda entry is runnable). Fixed by generalizing the calling
   convention to properly support 2- or 3-parameter agenda entries
   (see Part 1) and removing the state-holder concept entirely.
-  `examples/wc.rap` was updated to match (its `wc-counter` relation now
+  `examples/demos/wc.rap` was updated to match (its `wc-counter` relation now
   genuinely runs and does the counting itself, rather than being a
   passive cell read by `handle_input`).
 - **`enqueue_handle_input`'s De Bruijn index swap**: a 2-param wrapper

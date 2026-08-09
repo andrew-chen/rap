@@ -14,7 +14,7 @@
 **Modifies:** `core/core.hpp`, `core/mktypes.hpp`, `rap/agenda.hpp`,
              `rap/changeset.hpp`, `rap/rap.hpp`, `rap/loop.hpp`,
              `raprunner.cpp`, `stdlib/core.rap`, `rap/test_stage2.cpp`,
-             `examples/wc.rap`, `examples/todo.rap`  
+             `examples/demos/wc.rap`, `examples/demos/todo.rap`  
 **Status:** Specification — not yet implemented  
 **Date:** June 2026
 
@@ -77,8 +77,8 @@ consumers beyond the examples and tests this spec also rewrites):
   `raprunner.cpp`, `loop.hpp`) that initializes the two fields above —
   revert those construction sites to whatever they looked like before
   STAGE_B_AFTER_FIX added the fields
-- `wc-carriero` from `examples/wc.rap` (full rewrite, Part 7)
-- `carriero` from `stdlib/core.rap` and its use in `examples/todo.rap`
+- `wc-carriero` from `examples/demos/wc.rap` (full rewrite, Part 7)
+- `carriero` from `stdlib/core.rap` and its use in `examples/demos/todo.rap`
   (full rewrite, Part 8)
 - `make_carrier` from `rap/test_stage2.cpp` (full rewrite, Part 9)
 
@@ -349,7 +349,7 @@ No carrier, no dummy body, no `rel-argso`. `wc-counter` publishes its
 own running state as `args` and receives it back when it next runs.
 
 ```scheme
-; examples/wc.rap — character, word, and line counter
+; examples/demos/wc.rap — character, word, and line counter
 ; State (chars words lines in-word) is published as this query's own
 ; args — handed back to it directly when it next runs. No separate
 ; carrier entry, no closure introspection.
@@ -532,7 +532,7 @@ exists only for readability and is not load-bearing.]**
 that `(=/= entry-args (todo x))` with a fresh `x` never actually fires
 as a useful guard (the constraint is recorded but `x` stays unbound, so
 it never triggers) — this was the `collect-todoso` duplicate-output bug
-fixed directly in `examples/todo.rap` last session by deleting this
+fixed directly in `examples/demos/todo.rap` last session by deleting this
 branch entirely, since at the time every agenda entry actually was a
 todo item. **That assumption no longer holds once `strengthen-agendao`-
 style or other non-todo entries could coexist on a general agenda** —

@@ -66,9 +66,9 @@ raptests: rap_doctest
 	./rap_doctest tests/test_hello.rap tests/test_multi.rap tests/test_with_args.rap
 
 examples: raprunner repl
-	echo "" | ./raprunner examples/hello.rap
-	echo "hello world" | ./raprunner examples/echo.rap
-	echo "" | ./raprunner examples/wc.rap
+	echo "" | ./raprunner examples/demos/hello.rap
+	echo "hello world" | ./raprunner examples/demos/echo.rap
+	echo "" | ./raprunner examples/demos/wc.rap
 	@echo "Examples smoke test passed."
 
 clean:
