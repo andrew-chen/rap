@@ -123,7 +123,7 @@
 )
 
 (defrel (prepositional-phrase sentence-fragment)
-  (fresh (word speech-part remaining-words)
+  (fresh (word speech-part remaining-words n first-word)
    (conj
     (lengtho sentence-fragment n)
     (leqo 2 n)
@@ -159,7 +159,7 @@
 (defrel (main args ops)
  (fresh (ops0 output-sentence output-sentences)
   (conj
-   (findn 5 (output-sentence) (grammatically-correct-sentence output-sentence) output-sentences)
+   (findn 37 (output-sentence) (grammatically-correct-sentence output-sentence) output-sentences)
 ;   (grammatically-correct-sentence output-sentence)
    (call cons-ops
 ;     (output output-sentence)

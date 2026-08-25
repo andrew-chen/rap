@@ -66,9 +66,11 @@ struct GoalBin   { const struct Goal* g1; const struct Goal* g2; };
 // is a Pair list of the walked values in declaration order.
 struct GoalFindN {
   const Goal*   inner_goal;
-  Term          n_term;    // Int or Var — resolved at eval time
-  std::uint32_t n_vars;   // number of inner query variables
-  Term          result;   // outer variable to unify the answer list into
+  Term          n_term;     // Int or Var — resolved at eval time
+  std::uint32_t n_vars;    // number of inner query variables
+  Term          result;    // outer variable to unify the answer list into
+  Term          max_steps; // Int or Var; 0 means use default (100000); compiled
+                           // at parse time from optional 5th arg
 };
 static_assert(std::is_trivially_destructible_v<GoalFindN>);
 struct GoalFresh { std::uint32_t n; const Goal* body; };
@@ -576,11 +578,12 @@ inline const Goal* make_call(Arena& a, Term rel_term, const Term* args,
 }
 
 inline const Goal* make_findn(Arena& a, Term n_term, std::uint32_t n_vars,
-                               const Goal* inner_goal, Term result) {
+                               const Goal* inner_goal, Term result,
+                               Term max_steps) {
   Goal* g = a.make<Goal>();
   if (!g) return nullptr;
   g->tag   = GoalTag::FindN;
-  g->findn = GoalFindN{inner_goal, n_term, n_vars, result};
+  g->findn = GoalFindN{inner_goal, n_term, n_vars, result, max_steps};
   return g;
 }
 
@@ -683,6 +686,7 @@ inline const Goal* deep_copy_goal(Arena& dest, const Goal* g) {
       copy->findn.n_term     = deep_copy_term(dest, g->findn.n_term);
       copy->findn.n_vars     = g->findn.n_vars;
       copy->findn.result     = deep_copy_term(dest, g->findn.result);
+      copy->findn.max_steps  = deep_copy_term(dest, g->findn.max_steps);
       break;
     default:
       break;
@@ -1754,11 +1758,19 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
         answers = static_cast<Term*>(a.alloc(n * sizeof(Term), alignof(Term)));
         if (!answers) return StepResult::OOM;
       }
-      std::uint32_t found = 0;
+      // Resolve step budget: default 100000 if arg is zero/unresolved.
+      Term ms_t = eval_probe_arg(g->findn.max_steps, st, rel_env);
+      std::uint32_t max_steps = 100000;
+      if (ms_t.tag == TermTag::Int && ms_t.value > 0)
+        max_steps = static_cast<std::uint32_t>(ms_t.value);
 
-      while (found < n) {
+      std::uint32_t found      = 0;
+      std::uint32_t step_count = 0;
+
+      while (found < n && step_count < max_steps) {
         Work* iw = inner_q.pop();
         if (!iw) break;
+        ++step_count;
 
         State      y{};
         StepResult r = step(iw, inner_q, rel_env, y);

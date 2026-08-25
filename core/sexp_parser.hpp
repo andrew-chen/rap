@@ -613,19 +613,20 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv,
   }
 
   // ---- findn ----
-  // Form: (findn N_TERM (q0 q1 ...) INNER_GOAL RESULT_TERM)
+  // Form: (findn N_TERM (q0 q1 ...) INNER_GOAL RESULT_TERM [BUDGET])
   // N_TERM   — Int literal or outer variable; how many answers to collect.
   // (q0 ...) — one or more inner query variable names (non-empty list).
   // INNER_GOAL — goal body compiled with inner vars in scope (and outer vars).
   // RESULT_TERM — outer variable unified with the collected Pair list.
+  // BUDGET   — optional Int or outer variable; max inner steps (default 100000).
   // For n_vars==1: each element is the scalar answer value.
   // For n_vars>1:  each element is a Pair list of values in declaration order.
   if (sym_lit_eq(op, "findn")) {
-    // Expect exactly 4 arguments: N (q-list) GOAL RESULT
+    // Expect 4 or 5 arguments: N (q-list) GOAL RESULT [BUDGET]
     if (!c || !c->cdr || !c->cdr->cdr || !c->cdr->cdr->cdr ||
-        c->cdr->cdr->cdr->cdr) {
-      std::printf("[compile_goal] ERROR: 'findn' requires exactly 4 args "
-                  "(N_TERM (q0 ...) INNER_GOAL RESULT_TERM): ");
+        (c->cdr->cdr->cdr->cdr && c->cdr->cdr->cdr->cdr->cdr)) {
+      std::printf("[compile_goal] ERROR: 'findn' requires 4 or 5 args "
+                  "(N_TERM (q0 ...) INNER_GOAL RESULT_TERM [BUDGET]): ");
       print_sexp(x);
       std::printf("\n");
       return nullptr;
@@ -690,8 +691,15 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv,
 
     // Arg 4: result term (compiled with outer benv only — not inner vars)
     Term result = compile_term(a, genv, benv, c->car);
+    c = c->cdr;
 
-    return make_findn(a, n_term, n_vars, inner_goal, result);
+    // Arg 5 (optional): step budget
+    Term max_steps = Term::integer(100000);
+    if (c) {
+      max_steps = compile_term(a, genv, benv, c->car);
+    }
+
+    return make_findn(a, n_term, n_vars, inner_goal, result, max_steps);
   }
 
   // ---- probe ----

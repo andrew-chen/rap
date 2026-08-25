@@ -272,6 +272,42 @@ static void test_n_one() {
     EXPECT(is_nil(cdr(lst)), "T9: list is properly nil-terminated");
 }
 
+// T10: Explicit budget — budget of 1 terminates early; only partial list returned.
+// membero over (a b c d e) with budget=1 may collect 0 or 1 items, never all 5.
+static void test_budget_truncates() {
+    std::printf("\n--- T10: explicit budget truncates ---\n");
+    // Ask for 5 but set budget=1. Inner BFS fires at most 1 step before stopping.
+    // The list length must be < 5 (budget prevents full enumeration).
+    auto terms = run_query_terms(
+        "(defrel (membero x ls)"
+        "  (disj"
+        "    (fresh (t) (== ls (x . t)))"
+        "    (fresh (h t) (== ls (h . t)) (membero x t))))"
+        "(run 1 (result)"
+        "  (findn 5 (q) (membero q (a b c d e)) result 1))");
+
+    EXPECT(terms.size() == 1, "T10: outer solution still returned on budget hit");
+    if (terms.empty()) return;
+    EXPECT(list_len(terms[0]) < 5, "T10: partial list when budget is tiny");
+}
+
+// T11: Default budget (no 5th arg) behaves same as explicit 100000 budget
+// for small finite queries — all solutions collected when inner BFS finishes fast.
+static void test_default_budget_finite() {
+    std::printf("\n--- T11: default budget works for finite inner goals ---\n");
+    auto terms = run_query_terms(
+        "(defrel (membero x ls)"
+        "  (disj"
+        "    (fresh (t) (== ls (x . t)))"
+        "    (fresh (h t) (== ls (h . t)) (membero x t))))"
+        "(run 1 (result)"
+        "  (findn 3 (q) (membero q (a b c)) result))");
+
+    EXPECT(terms.size() == 1, "T11: one outer solution");
+    if (terms.empty()) return;
+    EXPECT(list_len(terms[0]) == 3, "T11: all 3 answers collected with default budget");
+}
+
 // ============================================================================
 // main
 // ============================================================================
@@ -287,6 +323,8 @@ int main() {
     test_rerun_on_branches();
     test_result_unification();
     test_n_one();
+    test_budget_truncates();
+    test_default_budget_finite();
 
     std::printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
     return (failed > 0) ? 1 : 0;
