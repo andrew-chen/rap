@@ -68,3 +68,4 @@ rap_doctest
 rap/bench_stage2
 rap/bench_stage2_dbg
 security/bench
+test_findn
