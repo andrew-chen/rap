@@ -612,6 +612,88 @@ inline const Goal* compile_goal(Arena& a, const GlobalBind* genv,
     return acc;
   }
 
+  // ---- findn ----
+  // Form: (findn N_TERM (q0 q1 ...) INNER_GOAL RESULT_TERM)
+  // N_TERM   — Int literal or outer variable; how many answers to collect.
+  // (q0 ...) — one or more inner query variable names (non-empty list).
+  // INNER_GOAL — goal body compiled with inner vars in scope (and outer vars).
+  // RESULT_TERM — outer variable unified with the collected Pair list.
+  // For n_vars==1: each element is the scalar answer value.
+  // For n_vars>1:  each element is a Pair list of values in declaration order.
+  if (sym_lit_eq(op, "findn")) {
+    // Expect exactly 4 arguments: N (q-list) GOAL RESULT
+    if (!c || !c->cdr || !c->cdr->cdr || !c->cdr->cdr->cdr ||
+        c->cdr->cdr->cdr->cdr) {
+      std::printf("[compile_goal] ERROR: 'findn' requires exactly 4 args "
+                  "(N_TERM (q0 ...) INNER_GOAL RESULT_TERM): ");
+      print_sexp(x);
+      std::printf("\n");
+      return nullptr;
+    }
+
+    // Arg 1: n_term
+    Term n_term = compile_term(a, genv, benv, c->car);
+    c = c->cdr;
+
+    // Arg 2: inner query variable list — must be a non-empty list of symbols
+    if (!c->car || c->car->tag != SexpTag::List) {
+      std::printf("[compile_goal] ERROR: 'findn' second arg must be a variable list: ");
+      print_sexp(x);
+      std::printf("\n");
+      return nullptr;
+    }
+    const SexpCell* vc = c->car->list.head;
+    if (!vc) {
+      std::printf("[compile_goal] ERROR: 'findn' variable list is empty: ");
+      print_sexp(x);
+      std::printf("\n");
+      return nullptr;
+    }
+
+    const SymEntry* qnames[64];
+    std::uint32_t   n_vars = 0;
+    for (; vc; vc = vc->cdr) {
+      if (!vc->car || vc->car->tag != SexpTag::Sym) {
+        std::printf("[compile_goal] ERROR: 'findn' variable list contains non-symbol: ");
+        print_sexp(c->car);
+        std::printf("\n");
+        return nullptr;
+      }
+      if (n_vars >= 64) {
+        std::printf("[compile_goal] ERROR: 'findn' variable list exceeds 64 names\n");
+        return nullptr;
+      }
+      qnames[n_vars++] = vc->car->sym;
+    }
+    c = c->cdr;
+
+    // Extend benv with inner query variables (same order as fresh).
+    const BoundBind* inner_benv = benv;
+    for (std::uint32_t i = 0; i < n_vars; ++i) {
+      inner_benv = bound_push(a, inner_benv, qnames[i]);
+      if (!inner_benv) {
+        std::printf("[compile_goal] ERROR: OOM pushing findn bound variable '%s'\n",
+                    qnames[i]->str);
+        return nullptr;
+      }
+    }
+
+    // Arg 3: inner goal (compiled with inner vars in scope)
+    const Goal* inner_goal = compile_goal(a, genv, inner_benv, c->car);
+    if (!inner_goal) {
+      std::printf("[compile_goal] ERROR: 'findn' inner goal failed to compile: ");
+      print_sexp(c->car);
+      std::printf("\n");
+      return nullptr;
+    }
+    c = c->cdr;
+
+    // Arg 4: result term (compiled with outer benv only — not inner vars)
+    Term result = compile_term(a, genv, benv, c->car);
+
+    return make_findn(a, n_term, n_vars, inner_goal, result);
+  }
+
   // ---- probe ----
   if (sym_lit_eq(op, "probe")) {
     if (!c || !c->cdr || !c->cdr->cdr || !c->cdr->cdr->cdr ||

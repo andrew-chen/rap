@@ -3,7 +3,8 @@ CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -pedantic -Werror
 
 all: parse_run test_rap security/security_test \
      core_test_extension rap_test_extension test_stage2 \
-     repl raprunner test_arith test_loop_additions rap_doctest
+     repl raprunner test_arith test_loop_additions rap_doctest \
+     test_findn
 
 parse_run: parse_run.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -62,6 +63,10 @@ rap_doctest: rap/rap_doctest.cpp \
     core/intern.hpp core/arena.hpp core/mktypes.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+test_findn: core/test_findn.cpp core/sexp_parser.hpp core/core.hpp \
+            core/intern.hpp core/arena.hpp core/mktypes.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 raptests: rap_doctest
 	./rap_doctest tests/test_hello.rap tests/test_multi.rap tests/test_with_args.rap
 
@@ -74,7 +79,7 @@ examples: raprunner repl
 clean:
 	rm -f parse_run.o parse_run rap/test_rap.o test_rap security/security_test \
 	      core_test_extension rap_test_extension test_stage2 repl raprunner \
-	      test_arith test_loop_additions rap_doctest *_asan \
+	      test_arith test_loop_additions rap_doctest test_findn *_asan \
 	      rap/bench_stage2 rap/bench_stage2_dbg security/bench
 	rm -rf raprunner.dSYM *_asan.dSYM rap/bench_stage2_dbg.dSYM
 
@@ -90,6 +95,7 @@ test: all
 	./test_stage2
 	./test_arith
 	./test_loop_additions
+	./test_findn
 	@echo "All tests complete."
 
 .PHONY: all clean run test examples raptests

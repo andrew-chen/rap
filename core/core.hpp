@@ -52,12 +52,25 @@ static_assert(std::is_trivially_destructible_v<PairNode>);
 
 
 // ---- Goals ----
-enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe, Call, Diseq };
+enum class GoalTag : std::uint8_t { Eq, Disj, Conj, Fresh, Probe, Call, Diseq, FindN };
 
 struct GoalEq    { Term u; Term v; };
 struct GoalDiseq { Term u; Term v; };
 static_assert(std::is_trivially_destructible_v<GoalDiseq>);
 struct GoalBin   { const struct Goal* g1; const struct Goal* g2; };
+
+// GoalFindN: collect the first N answers to inner_goal into a Pair list,
+// unifying that list with result.  Inner query variables occupy Var IDs
+// [st.counter, st.counter + n_vars) at runtime; names[i] -> Var(st.counter+i).
+// For n_vars==1 each element is the scalar answer; for n_vars>1 each element
+// is a Pair list of the walked values in declaration order.
+struct GoalFindN {
+  const Goal*   inner_goal;
+  Term          n_term;    // Int or Var — resolved at eval time
+  std::uint32_t n_vars;   // number of inner query variables
+  Term          result;   // outer variable to unify the answer list into
+};
+static_assert(std::is_trivially_destructible_v<GoalFindN>);
 struct GoalFresh { std::uint32_t n; const Goal* body; };
 
 struct GoalProbe {
@@ -85,6 +98,7 @@ struct Goal {
     GoalProbe probe;
     GoalCall  call;   // Stage 0A
     GoalDiseq diseq;  // Diseq (=/=)
+    GoalFindN findn;
   };
 };
 static_assert(std::is_trivially_destructible_v<Goal>);
@@ -387,6 +401,7 @@ inline Outcome ground_check_goal(Arena& a, const Goal* g0, const State& st, cons
 
       case GoalTag::Call:
       case GoalTag::Diseq:
+      case GoalTag::FindN:
         return Outcome::Insufficient;
 
       default:
@@ -560,6 +575,15 @@ inline const Goal* make_call(Arena& a, Term rel_term, const Term* args,
   return g;
 }
 
+inline const Goal* make_findn(Arena& a, Term n_term, std::uint32_t n_vars,
+                               const Goal* inner_goal, Term result) {
+  Goal* g = a.make<Goal>();
+  if (!g) return nullptr;
+  g->tag   = GoalTag::FindN;
+  g->findn = GoalFindN{inner_goal, n_term, n_vars, result};
+  return g;
+}
+
 
 // ============================================================================
 // deep_copy_term: deep-copies a term into dest, rewriting PairNode* pointers.
@@ -654,6 +678,12 @@ inline const Goal* deep_copy_goal(Arena& dest, const Goal* g) {
       }
       break;
     }
+    case GoalTag::FindN:
+      copy->findn.inner_goal = deep_copy_goal(dest, g->findn.inner_goal);
+      copy->findn.n_term     = deep_copy_term(dest, g->findn.n_term);
+      copy->findn.n_vars     = g->findn.n_vars;
+      copy->findn.result     = deep_copy_term(dest, g->findn.result);
+      break;
     default:
       break;
   }
@@ -1675,6 +1705,113 @@ inline StepResult Evaluator::step(Work* w, WorkQueue& q,
         return apply_k_or_yield(a, q, witness, k, w, yielded);
       }
       return apply_k_or_yield(a, q, st, k, w, yielded);
+    }
+
+    // -----------------------------------------------------------------------
+    // GoalTag::FindN: collect the first N answers of inner_goal into a list.
+    // Outer bindings flow into the inner query (logical); inner answer bindings
+    // do not propagate outward (only the collected list is unified with result).
+    // Re-executes fresh on every outer branch — the "logical" property falls out
+    // automatically from the State-based model (no caching anywhere).
+    // -----------------------------------------------------------------------
+    case GoalTag::FindN: {
+      Term n_t = eval_probe_arg(g->findn.n_term, st, rel_env);
+      if (n_t.tag != TermTag::Int || n_t.value < 0) return StepResult::NoYield;
+      std::uint32_t n      = static_cast<std::uint32_t>(n_t.value);
+      std::uint32_t n_vars = g->findn.n_vars;
+
+      // Inner query variables: Var(inner_base + i) for i in [0, n_vars).
+      // names[i] (i-th declared var) maps to Var(inner_base + i) — see Fresh.
+      std::uint32_t inner_base = st.counter;
+
+      // Build EnvFrame chain for the inner body (same pattern as GoalTag::Fresh).
+      const EnvFrame* inner_env = st.env;
+      for (std::uint32_t i = 0; i < n_vars; ++i) {
+        EnvFrame* ef = a.make<EnvFrame>();
+        if (!ef) return StepResult::OOM;
+        ef->var_id = inner_base + i;
+        ef->next   = inner_env;
+        inner_env  = ef;
+      }
+
+      State inner_st0{ st.subst, st.constraints, inner_env,
+                       inner_base + n_vars, 0, 0 };
+
+      WorkQueue inner_q;
+      const Kont* kd = kont_done(a);
+      if (!kd) return StepResult::OOM;
+
+      Work* w0 = a.make<Work>();
+      if (!w0) return StepResult::OOM;
+      w0->g  = g->findn.inner_goal;
+      w0->st = inner_st0;
+      w0->k  = kd;
+      inner_q.push(w0);
+
+      // Pre-allocate answer slots (n entries); collect via bump index.
+      Term* answers = nullptr;
+      if (n > 0) {
+        answers = static_cast<Term*>(a.alloc(n * sizeof(Term), alignof(Term)));
+        if (!answers) return StepResult::OOM;
+      }
+      std::uint32_t found = 0;
+
+      while (found < n) {
+        Work* iw = inner_q.pop();
+        if (!iw) break;
+
+        State      y{};
+        StepResult r = step(iw, inner_q, rel_env, y);
+        if (r == StepResult::OOM) {
+          client_region_.client_count = st.saved_client_count;
+          return StepResult::OOM;
+        }
+        if (r != StepResult::Yield) continue;
+
+        Term ans;
+        if (n_vars == 1) {
+          ans = walk_deep(a, Term::var(inner_base), y.subst, rel_env);
+        } else {
+          // Build a Pair list in declaration order: (val0 val1 ... val_{n_vars-1})
+          ans = Term::nil();
+          for (std::int32_t vi = static_cast<std::int32_t>(n_vars) - 1; vi >= 0; --vi) {
+            Term v = walk_deep(a, Term::var(inner_base + static_cast<std::uint32_t>(vi)),
+                               y.subst, rel_env);
+            PairNode* p = a.make<PairNode>();
+            if (!p) {
+              client_region_.client_count = st.saved_client_count;
+              return StepResult::OOM;
+            }
+            p->car = v;
+            p->cdr = ans;
+            ans = Term::make_pair(p);
+          }
+        }
+        answers[found++] = ans;
+      }
+
+      // Restore client_count so inner ops do not appear in the outer ChangeSet.
+      client_region_.client_count = st.saved_client_count;
+
+      // Build Pair list from answers[] in BFS order (forward).
+      Term list = Term::nil();
+      for (std::int32_t i = static_cast<std::int32_t>(found) - 1; i >= 0; --i) {
+        PairNode* p = a.make<PairNode>();
+        if (!p) return StepResult::OOM;
+        p->car = answers[i];
+        p->cdr = list;
+        list = Term::make_pair(p);
+      }
+
+      // Unify result variable with the collected list.
+      Term res = eval_probe_arg(g->findn.result, st, rel_env);
+      const Binding* s = st.subst;
+      if (!unify(a, res, list, nullptr, s, rel_env)) return StepResult::NoYield;
+      if (!check_constraints(a, st.constraints, s, rel_env)) return StepResult::NoYield;
+
+      State st2{ s, st.constraints, st.env, st.counter,
+                 st.client_offset, st.saved_client_count };
+      return apply_k_or_yield(a, q, st2, k, w, yielded);
     }
 
     // -----------------------------------------------------------------------
