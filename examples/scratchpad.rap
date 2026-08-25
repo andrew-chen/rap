@@ -1,0 +1,178 @@
+; examples/scratchpad.rap 
+; The programming challenge for 8/24/2026
+; Run: ./raprunner examples/scratchpad.rap < /dev/null
+; Uses implementation at https://github.com/andrew-chen/rap
+
+(defrel (example-sentence sentence)
+ (disj
+  (== sentence (the quick brown fox jumped over the lazy dog))
+  (== sentence (the dog and the cat love to be quick))
+ )
+)
+
+(defrel (part-of-speech word part)
+ (disj
+  (conj
+   (membero word (the))
+   (== part article)
+  )
+  (conj
+   (membero word (quick brown lazy))
+   (== part adjective)
+  )
+  (conj
+   (membero word (fox dog cat))
+   (== part noun)
+  )
+  (conj
+   (membero word (jumped love be))
+   (== part verb)
+  )
+  (conj
+   (membero word (over to))
+   (== part preposition)
+  )
+ )
+)
+    
+(defrel (bigrams sentence bigramlist)
+ (fresh (n bigram1 sentence-remainder other-bigrams)
+  (conj
+   (lengtho sentence n)
+   (disj
+    (conj
+     (leq 2 n) (takeo 2 sentence bigram1) (cdro sentence sentence-remainder) (bigrams sentence-remainder other-bigrams) (conso bigram1 other-bigrams bigramlist)
+    )
+    (conj
+     (gto 2 n) (== bigramlist ())
+    )
+   )
+  )
+ )
+)
+
+(defrel (nounal sentence-fragment)
+ (disj
+  (fresh (word speech-part)
+   (conj
+    (lengtho sentence-fragment 1)
+    (caro sentence-fragment word)
+    (part-of-speech word speech-part)
+    (== speech-part noun)
+   )
+  )
+  (fresh (n first-word remaining-words)
+   (conj
+    (lengtho sentence-fragment n)
+    (leqo 2 n)
+    (caro sentence-fragment first-word)
+    (disj
+     (part-of-speech first-word article)
+     (part-of-speech first-word adjective)
+    )
+    (cdro sentence-fragment remaining-words)
+    (nounal remaining-words)
+   )
+  )
+ )
+)
+ 
+(defrel (verbal sentence-fragment)
+ (disj
+  (fresh (word speech-part)
+   (conj
+    (lengtho sentence-fragment 1)
+    (caro sentence-fragment word)
+    (part-of-speech word speech-part)
+    (== speech-part verb)
+   )
+  )
+  (fresh (n first-word remaining-words)
+   (conj
+    (lengtho sentence-fragment n)
+    (leqo 2 n)
+    (caro sentence-fragment first-word)
+    (part-of-speech first-word adverb)
+    (cdro sentence-fragment remaining-words)
+    (verbal remaining-words)
+   )
+  )
+ )
+)
+
+(defrel (verbal-with-possible-prepositional-phrase sentence-fragment)
+ (fresh (first-half second-half)
+  (appendo first-half second-half sentence-fragment)
+  (verbal first-half)
+  (disj
+   (== second-half ())
+   (prepositional-phrase second-half)
+  )
+ )
+)
+
+(defrel (nounal-with-possible-prepositional-phrase sentence-fragment)
+ (fresh (first-half second-half)
+  (appendo first-half second-half sentence-fragment)
+  (nounal first-half)
+  (disj
+   (== second-half ())
+   (prepositional-phrase second-half)
+  )
+ )
+)
+
+(defrel (prepositional-phrase sentence-fragment)
+  (fresh (word speech-part remaining-words)
+   (conj
+    (lengtho sentence-fragment n)
+    (leqo 2 n)
+    (caro sentence-fragment first-word)
+    (part-of-speech first-word preposition)
+    (cdro sentence-fragment remaining-words)
+    (nounal-with-possible-prepositional-phrase remaining-words)
+   )
+  )
+)
+   
+(defrel (grammatically-correct-sentence sentence)
+ (disj
+  (fresh (n v)
+   (conj
+    (nounal-with-possible-prepositional-phrase n)
+    (verbal-with-possible-prepositional-phrase v)
+    (appendo n v sentence)
+   )
+  )
+  (fresh (n v o p)
+   (conj
+    (nounal-with-possible-prepositional-phrase n)
+    (verbal-with-possible-prepositional-phrase v)
+    (nounal-with-possible-prepositional-phrase o)
+    (appendo v o p)
+    (appendo n p sentence)
+   )
+  )
+ )
+)
+  
+(defrel (main args ops)
+ (fresh (ops0 output-sentence output-sentences)
+  (conj
+   (findn 5 (output-sentence) (grammatically-correct-sentence output-sentence) output-sentences)
+;   (grammatically-correct-sentence output-sentence)
+   (call cons-ops
+;     (output output-sentence)
+     (output output-sentences)
+     (no-ops)
+     ops0)
+   (call cons-ops
+     (output (h e l l o - w o r l d))
+     ops0
+     ops))))
+
+(defrel (handle_input agenda fd input ops)
+  (call no-ops ops))
+
+; (run 5 (q) (grammatically-correct-sentence q))
+
