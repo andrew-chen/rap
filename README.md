@@ -4,12 +4,11 @@ A C++20 logic programming engine designed for embedding in systems software.
 Zero dependencies. Header-only library (`core/` and `rap/`). Callable via
 FFI from any language.
 
-> **Papers:** This codebase supports two papers currently under review:
-> - "Relational Agenda Programming: A Uniform Execution Model for
->   Embedded Reasoning Systems"
-> - "Lightweight Runtime Security Policy Verification Using an Embeddable C++ miniKanren"
->
-> Venue information will be added upon acceptance.
+> **Papers:** This codebase supports two published papers:
+> - ["Relational Agenda Programming: A Uniform Execution Model for Embedded Reasoning Systems"](https://2026.splashcon.org/track/splash-2026-onward--papers#event-overview)  
+>   Andrew Shi-hwa Chen — *SPLASH 2026, Onward! Papers*
+> - ["Lightweight Runtime Security Policy Verification Using an Embeddable C++ miniKanren"](https://icfp26.sigplan.org/home/minikanren-2026#event-overview)  
+>   Andrew Shi-hwa Chen, Kodippilige Hashan Sharindu Kodippilige — *miniKanren 2026 @ ICFP 2026*
 
 ---
 
