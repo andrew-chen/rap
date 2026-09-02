@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
         }
 
         accumulator += line;
-        accumulator += ' ';
+        accumulator += '\n';
 
         // Dispatch only when a complete form has been seen: depth returned to
         // 0 after having been > 0 (i.e. at least one '(' was encountered).
