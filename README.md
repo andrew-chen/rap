@@ -9,6 +9,52 @@ FFI from any language.
 >   Andrew Shi-hwa Chen — *SPLASH 2026, Onward! Papers*
 > - ["Lightweight Runtime Security Policy Verification Using an Embeddable C++ miniKanren"](https://icfp26.sigplan.org/home/minikanren-2026#event-overview)  
 >   Andrew Shi-hwa Chen, Kodippilige Hashan Sharindu Kodippilige — *miniKanren 2026 @ ICFP 2026*
+>
+> The [`v1.0.0` release](https://github.com/andrew-chen/rap/releases/tag/v1.0.0) is the version described in the Onward! 2026 paper.
+
+---
+
+## After the Talk
+
+If you've just come from the presentation and want to run the code:
+
+1. **Build.**
+   ```bash
+   make
+   ```
+   Requires a C++20 compiler (`clang++` or `g++`); no other dependencies.
+
+2. **Run the reflective agenda-pruning example** — the Section 5.2 case study.
+   ```bash
+   echo "" | ./raprunner examples/memory/component_tests/test_subsume_agenda.rap
+   ```
+   Expected output:
+   ```
+   (subsume-and-pruneo-ran (2 3))
+   (explore-ran hypA 3)
+   (explore-ran hypB 5)
+   ```
+   The two redundant `hypA` entries (depths 1 and 2) are pruned before either runs;
+   only the deepest exploration and the unrelated `hypB` entry survive to report.
+   The two-queue loop that makes this possible is described in the
+   [Architecture](#architecture) section below, and in Figure 1 / Section 3.1 of the paper.
+
+3. **ChangeSet construction.** The `no-ops` / `cons-ops` relations and the validity
+   guarantee are summarised in the [What This Is](#what-this-is) section immediately
+   below (search for "ChangeSet validity by construction").
+
+4. **Run the test suite.**
+   ```bash
+   make test       # nine test binaries
+   make raptests   # .rap doctest suite (run from project root)
+   ```
+   What each binary covers is listed in the [Test Suite](#test-suite) section.
+
+5. **The larger example.** Once you're comfortable with the smaller one, the
+   full adversarial memory-game from Section 6:
+   ```bash
+   echo "" | ./raprunner examples/memory/memory_stage3_0.rap
+   ```
 
 ---
 
@@ -326,6 +372,12 @@ Three known limitations:
   current agenda snapshot, but the system provides no global termination
   guarantee. A query that grows the agenda without bound runs forever.
 
+A precise account of these limitations, their mitigations, and planned future
+work is in Section 9 of the Onward! 2026 paper. Comparisons to miniKanren
+meta-interpreters, production systems, CHR, and embeddable logic systems are
+in Section 8. The formal semantics of agenda selection, ChangeSet application,
+and backtracking isolation are in Sections 3.1–3.8.
+
 ---
 
 ## Performance
@@ -356,7 +408,7 @@ accounts for the higher latency relative to simpler structural queries.
 make test
 ```
 
-Runs eight test binaries:
+Runs nine test binaries:
 
 | Binary | What it tests |
 |---|---|
@@ -368,8 +420,27 @@ Runs eight test binaries:
 | `test_stage2` | `subsumeso` / `subsume-and-pruneo`: Remove(10), Remove(11), Output((subsume-and-pruneo-ran (10 11))); plus ChangeSet backtrack-safety tests |
 | `test_arith` | Native integer arithmetic (`addo`, `leqo`, `gto`) |
 | `test_loop_additions` | `RapLoop::call_main`, `quiet` flag, `build_args_term` |
+| `test_findn` | `findn` goal primitive: basic collection, N=0, multi-var, outer binding, result unification, step-budget truncation |
 
 Run `make raptests` separately to execute the `.rap` doctest suite (requires running from the project root so `stdlib/core.rap` is found).
+
+---
+
+## Paper Claims and Where to Find Them
+
+A concise map from the paper's central claims to the repository evidence:
+
+| Claim (paper section) | Where to find it |
+|---|---|
+| Core relational behavior: `appendo` forward and backward, mutual recursion via `fresh`, disequality | `parse_run.cpp` programs 8, 10, 11, 13 |
+| `Probe` `true`/`false` outcomes: correct policy classification for all 10 events | `security/security_test.cpp` (3 permitted + 3 violations AC; 2 permitted + 2 violations NP) |
+| `Probe` `insufficient` outcome: unground variable with `req_ground=true` short-circuits | `parse_run.cpp` program 6: `(probe (== q foo) insufficient 50 true true)` |
+| Invalid ChangeSet rejected at construction: `cons-ops` fails on malformed ops | `rap/test_rap.cpp`, `rap/rap_test_extension.cpp` (no-ops / cons-ops arity checks) |
+| Branch isolation: stale ops from a failed branch excluded from final ChangeSet | `rap/test_stage2.cpp` Test A |
+| `Probe` isolation: ops pushed inside a sandboxed `Probe` excluded from outer ChangeSet | `rap/test_stage2.cpp` Test B |
+| Reflective pruning: `subsume-and-pruneo` correctly removes exactly the two subsumed entries | `rap/test_stage2.cpp` (asserted); `examples/memory/component_tests/test_subsume_agenda.rap` (runnable, expected output in [After the Talk](#after-the-talk)) |
+
+The ChangeSet validity theorem (Theorem 3.1) and its precise scope — what it guarantees and what it does not — are in Section 3.8 of the paper; the proof is in Appendix B. The theorem is not separately re-stated here to avoid any risk of the prose drifting from the paper's own carefully-worded version.
 
 ---
 
